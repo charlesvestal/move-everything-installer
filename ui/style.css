@@ -53,6 +53,14 @@ h3 {
     margin-bottom: 2rem;
 }
 
+.version-subtitle {
+    text-align: center;
+    color: #888;
+    margin-top: -0.5rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.95rem;
+}
+
 /* Buttons */
 button {
     background: #0066cc;
@@ -848,7 +856,7 @@ button.secondary:hover {
     margin-bottom: 1.5rem;
 }
 
-#core-upgrade-row .module-row {
+#core-upgrade-row .module-row-upgrade {
     border: 2px solid #ff9900;
     background: #2a2a1a;
 }
