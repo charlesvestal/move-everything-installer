@@ -32,7 +32,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac --${{ matrix.arch }}
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -57,7 +57,7 @@ jobs:
         run: npm ci
 
       - name: Build installer
-        run: npx electron-builder --linux --${{ matrix.arch }}
+        run: npx electron-builder --linux --${{ matrix.arch }} --publish never
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -82,7 +82,7 @@ jobs:
         run: npm ci
 
       - name: Build installer
-        run: npx electron-builder --win --${{ matrix.arch }}
+        run: npx electron-builder --win --${{ matrix.arch }} --publish never
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
