@@ -470,11 +470,15 @@ async function testSsh(hostname) {
                     if (stdout.trim() === 'test') {
                         console.log(`[DEBUG] Native SSH works as ${username}@${hostIp}`);
 
-                        // If connected as ableton, fix authorized_keys permissions
+                        // If connected as ableton, try to fix authorized_keys permissions (non-fatal)
                         if (username === 'ableton') {
-                            console.log('[DEBUG] Fixing authorized_keys permissions via native SSH');
-                            const chmodCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o BatchMode=yes ${username}@${hostIp} "chmod 600 ~/.ssh/authorized_keys && chmod 700 ~/.ssh"`;
-                            await execAsync(chmodCmd, { timeout: 5000 });
+                            try {
+                                console.log('[DEBUG] Fixing authorized_keys permissions via native SSH');
+                                const chmodCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o BatchMode=yes ${username}@${hostIp} "chmod 600 ~/.ssh/authorized_keys 2>/dev/null; chmod 700 ~/.ssh 2>/dev/null; true"`;
+                                await execAsync(chmodCmd, { timeout: 5000 });
+                            } catch (chmodErr) {
+                                console.log('[DEBUG] chmod authorized_keys failed (non-fatal):', chmodErr.message);
+                            }
                         }
 
                         return true;
@@ -960,8 +964,8 @@ async function installMain(tarballPath, hostname, flags = []) {
         const { promisify } = require('util');
         const execAsync = promisify(exec);
 
-        // Find Git Bash
-        const bashPath = await findGitBash();
+        // Find bash - use /bin/bash directly on macOS/Linux, find Git Bash on Windows
+        const bashPath = process.platform === 'win32' ? await findGitBash() : '/bin/bash';
 
         // Create temp directory for install script
         const tempDir = path.join(os.tmpdir(), `move-installer-${Date.now()}`);
@@ -1058,6 +1062,10 @@ async function installMain(tarballPath, hostname, flags = []) {
             }
 
             console.log('[DEBUG] Installation complete!');
+
+            // Fix permissions: install.sh runs as root, so ensure ableton owns everything
+            await fixPermissions(hostname);
+
             return true;
         } finally {
             // Clean up temp directory
@@ -1070,6 +1078,19 @@ async function installMain(tarballPath, hostname, flags = []) {
     } catch (err) {
         console.error('[DEBUG] Installation error:', err.message);
         throw new Error(`Installation failed: ${err.message}`);
+    }
+}
+
+async function fixPermissions(hostname) {
+    try {
+        const hostIp = cachedDeviceIp || hostname;
+        console.log('[DEBUG] Fixing permissions: chown -R ableton:users /data/UserData/move-anything');
+        await sshExec(hostIp, 'chown -R ableton:users /data/UserData/move-anything', { username: 'root' });
+        console.log('[DEBUG] Permissions fixed');
+        return true;
+    } catch (err) {
+        console.log('[DEBUG] Permission fix failed (non-fatal):', err.message);
+        return false;
     }
 }
 
@@ -1093,14 +1114,21 @@ async function installModulePackage(moduleId, tarballPath, componentType, hostna
         const hostIp = cachedDeviceIp || hostname;
         console.log(`[DEBUG] Using host: ${hostIp} (cached: ${!!cachedDeviceIp})`);
 
+        // Ensure target directory is writable by ableton (may be root-owned from older installs)
+        const categoryPath = getInstallSubdir(componentType);
+        try {
+            await sshExec(hostIp, `chown -R ableton:users /data/UserData/move-anything/modules/${categoryPath}`, { username: 'root' });
+        } catch (chownErr) {
+            console.log('[DEBUG] chown fix failed (non-fatal):', chownErr.message);
+        }
+
         // Upload to Move Everything directory using SFTP
         const remotePath = `/data/UserData/move-anything/${filename}`;
         console.log(`[DEBUG] Uploading ${filename} to device via SFTP...`);
         await sftpUpload(hostIp, tarballPath, remotePath);
         console.log(`[DEBUG] Upload complete for ${moduleId}`);
 
-        // Extract and install module (similar to install.sh module installation)
-        const categoryPath = getInstallSubdir(componentType);
+        // Extract and install module
         console.log(`[DEBUG] Extracting ${moduleId} to modules/${categoryPath}/`);
         await sshExec(hostIp, `cd /data/UserData/move-anything && mkdir -p modules/${categoryPath} && tar -xzf ${filename} -C modules/${categoryPath}/ && rm ${filename}`);
         console.log(`[DEBUG] Module ${moduleId} installed successfully`);
@@ -1532,7 +1560,7 @@ async function fixPermissions(hostname) {
 
         // Ensure all files in move-anything are owned by ableton
         // Use root to fix any files that may have been created with wrong ownership
-        await sshExec(hostIp, 'chown -R ableton:ableton /data/UserData/move-anything/', { username: 'root' });
+        await sshExec(hostIp, 'chown -R ableton:users /data/UserData/move-anything/', { username: 'root' });
 
         // Ensure shim has setuid bit (critical for LD_PRELOAD to work)
         await sshExec(hostIp, 'chmod u+s /data/UserData/move-anything/move-anything-shim.so', { username: 'root' });
