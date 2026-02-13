@@ -1233,7 +1233,7 @@ async function checkCoreInstallation(hostname) {
         // Get core version only
         let coreVersion = null;
         try {
-            const versionOutput = await sshExec(hostIp, 'cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
+            const versionOutput = await sshExec(hostIp, 'cat /data/UserData/move-anything/host/version.txt 2>/dev/null || cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
             coreVersion = versionOutput.trim() || null;
             console.log('[DEBUG] Core version:', coreVersion);
         } catch (err) {
@@ -1267,7 +1267,7 @@ async function checkInstalledVersions(hostname, progressCallback = null) {
         let coreVersion = null;
         try {
             if (progressCallback) progressCallback('Checking core version...');
-            const versionOutput = await sshExec(hostIp, 'cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
+            const versionOutput = await sshExec(hostIp, 'cat /data/UserData/move-anything/host/version.txt 2>/dev/null || cat /data/UserData/move-anything/version.txt 2>/dev/null || echo ""');
             coreVersion = versionOutput.trim() || null;
             console.log('[DEBUG] Core version:', coreVersion);
         } catch (err) {
