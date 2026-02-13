@@ -1,6 +1,20 @@
 // Test: Change text to confirm app.js is loading
 document.getElementById('status-text').textContent = 'app.js is loading...';
 
+// Pre-warm local network permission on macOS.
+// The first request to a .local address triggers the system "Local Network" dialog.
+// Fire it now so the dialog appears while the user reads the warning screen,
+// rather than blocking discovery later.
+(async () => {
+    try {
+        console.log('[DEBUG] Pre-warming local network access...');
+        await window.installer.invoke('validate_device_at', { baseUrl: 'http://move.local' });
+        console.log('[DEBUG] Local network pre-warm succeeded');
+    } catch (e) {
+        console.log('[DEBUG] Local network pre-warm failed (expected):', e.message);
+    }
+})();
+
 // Log buffer for export
 const logBuffer = [];
 function addLog(source, message) {
@@ -399,6 +413,19 @@ async function checkVersions() {
             document.getElementById('available-modules').style.display = 'none';
             document.getElementById('secondary-actions').style.display = 'none';
             document.querySelector('#screen-modules > .action-buttons').style.display = 'flex';
+
+            // Show version that will be installed
+            const subtitle = document.getElementById('core-version-subtitle');
+            try {
+                const latestRelease = await window.installer.invoke('get_latest_release');
+                if (latestRelease && latestRelease.version) {
+                    subtitle.textContent = `Installing version ${latestRelease.version}`;
+                    subtitle.style.display = '';
+                }
+            } catch (e) {
+                subtitle.style.display = 'none';
+            }
+
             showScreen('modules');
             return;
         }
@@ -456,6 +483,18 @@ async function checkVersions() {
         document.getElementById('module-categories').style.display = 'none';
         document.getElementById('secondary-actions').style.display = 'flex';
 
+        // Show version subtitle in management mode
+        const subtitle = document.getElementById('core-version-subtitle');
+        if (versionInfo.coreUpgrade) {
+            subtitle.textContent = `Core ${versionInfo.coreUpgrade.current} — upgrade available: ${versionInfo.coreUpgrade.available}`;
+            subtitle.style.display = '';
+        } else if (versionInfo.coreVersion) {
+            subtitle.textContent = `Core version ${versionInfo.coreVersion}`;
+            subtitle.style.display = '';
+        } else {
+            subtitle.style.display = 'none';
+        }
+
         // Hide fresh-install action buttons, management mode has its own buttons
         document.querySelector('#screen-modules > .action-buttons').style.display = 'none';
 
@@ -478,6 +517,7 @@ async function checkVersions() {
         document.getElementById('installed-modules').style.display = 'none';
         document.getElementById('available-modules').style.display = 'none';
         document.getElementById('secondary-actions').style.display = 'none';
+        document.getElementById('core-version-subtitle').style.display = 'none';
         document.querySelector('#screen-modules > .action-buttons').style.display = 'flex';
         showScreen('modules');
     }
@@ -738,7 +778,7 @@ function displayManagementModules() {
     coreRow.innerHTML = '';
 
     const coreRowDiv = document.createElement('div');
-    coreRowDiv.className = 'module-row';
+    coreRowDiv.className = versionInfo.coreUpgrade ? 'module-row module-row-upgrade' : 'module-row';
 
     const coreInfo = document.createElement('div');
     coreInfo.className = 'module-row-info';
