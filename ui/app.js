@@ -1116,6 +1116,12 @@ async function handleUpgradeAll() {
             progress = 40;
         }
 
+        // Fix permissions before module installs (root-owned dirs from older installs)
+        if (moduleObjects.length > 0) {
+            updateInstallProgress('Fixing file permissions...', progress);
+            await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
+        }
+
         // Upgrade modules
         if (moduleObjects.length > 0) {
             const remainingProgress = 100 - progress;
@@ -1720,6 +1726,10 @@ async function startInstallation() {
 
         // Install modules (if any)
         if (modulesToInstall.length > 0) {
+            // Fix permissions before module installs (root-owned dirs from core install)
+            updateInstallProgress('Fixing file permissions...', startProgressForModules);
+            await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
+
             updateInstallProgress('Fetching module catalog...', startProgressForModules);
             const modules = state.allModules;
 
@@ -1899,6 +1909,19 @@ function parseError(error) {
                 'The authorization code may have expired',
                 'Try restarting the installer',
                 'Make sure you entered the correct code from your Move display'
+            ]
+        };
+    }
+
+    // File permission errors (root-owned directories on device)
+    if (errorStr.includes('permission denied') && (errorStr.includes('sftp') || errorStr.includes('module') || errorStr.includes('mkdir') || errorStr.includes('tar'))) {
+        return {
+            title: 'Permission Error',
+            message: 'Could not write to the Move Everything directory on your device.',
+            suggestions: [
+                'Some files on the device may be owned by root from a previous install',
+                'Try "Repair Installation" from the menu to fix permissions',
+                'Or SSH in as root and run: chown -R ableton:ableton /data/UserData/move-anything'
             ]
         };
     }
@@ -2177,6 +2200,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             updateChecklistItem('core', 'completed');
 
+            // Fix permissions before module installs (root-owned dirs from core install)
+            if (allInstalled.length > 0) {
+                updateInstallProgress('Fixing file permissions...', 29);
+                await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
+            }
+
             // Reinstall each module
             if (allInstalled.length > 0) {
                 const progressPerModule = 60 / allInstalled.length;
@@ -2201,10 +2230,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     updateChecklistItem(module.id, 'completed');
                 }
             }
-
-            // Fix permissions on all files
-            updateInstallProgress('Fixing file permissions...', 95);
-            await window.installer.invoke('fix_permissions', { hostname: state.deviceIp });
 
             updateInstallProgress('Repair complete!', 100);
             setTimeout(() => {
