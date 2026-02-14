@@ -57,7 +57,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: installer-linux
-          path: dist/*.AppImage
+          path: dist/*.deb
 
   build-windows:
     runs-on: windows-latest
@@ -114,5 +114,5 @@ jobs:
         with:
           files: |
             artifacts/*.zip
-            artifacts/*.AppImage
+            artifacts/*.deb
             artifacts/*.exe
