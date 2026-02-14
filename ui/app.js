@@ -1362,9 +1362,16 @@ function setAssetStatus(msg, type) {
     else if (type === 'uploading') el.classList.add('uploading');
 }
 
+function isAssetBrowserAtRoot() {
+    return assetBrowser.assets?.path === '.' &&
+           assetBrowser.currentPath === assetBrowser.basePath;
+}
+
 function openAssetBrowser(moduleId, moduleName, componentType, assets) {
     const categoryPath = getInstallSubdir(componentType);
-    const basePath = `/data/UserData/move-anything/modules/${categoryPath}/${moduleId}/${assets.path}`;
+    const basePath = assets.path === '.'
+        ? `/data/UserData/move-anything/modules/${categoryPath}/${moduleId}`
+        : `/data/UserData/move-anything/modules/${categoryPath}/${moduleId}/${assets.path}`;
 
     assetBrowser.open = true;
     assetBrowser.moduleId = moduleId;
@@ -1395,6 +1402,18 @@ async function refreshAssetListing() {
     setAssetStatus('', null);
 
     try {
+        // Auto-create ensure_dirs when at root
+        if (assetBrowser.currentPath === assetBrowser.basePath && assetBrowser.assets?.ensure_dirs) {
+            for (const dir of assetBrowser.assets.ensure_dirs) {
+                await enqueueModuleOp(async () => {
+                    return await window.installer.invoke('create_remote_dir', {
+                        hostname: state.deviceIp,
+                        remotePath: assetBrowser.basePath + '/' + dir
+                    });
+                });
+            }
+        }
+
         const entries = await enqueueModuleOp(async () => {
             return await window.installer.invoke('list_remote_dir', {
                 hostname: state.deviceIp,
@@ -1403,19 +1422,33 @@ async function refreshAssetListing() {
         });
         renderAssetList(entries);
         renderBreadcrumb();
+        updateAssetToolbarVisibility();
         setAssetStatus(`${entries.length} item${entries.length !== 1 ? 's' : ''}`, null);
     } catch (err) {
         console.error('Failed to list remote dir:', err);
         setAssetStatus('Failed to load directory', 'error');
         renderAssetList([]);
         renderBreadcrumb();
+        updateAssetToolbarVisibility();
     } finally {
         assetBrowser.loading = false;
     }
 }
 
+function updateAssetToolbarVisibility() {
+    const atRoot = isAssetBrowserAtRoot();
+    document.getElementById('asset-browser-upload').style.display = atRoot ? 'none' : '';
+    document.getElementById('asset-browser-mkdir').style.display = atRoot ? 'none' : '';
+}
+
 function renderAssetList(entries) {
     const listEl = document.getElementById('asset-browser-list');
+    const atRoot = isAssetBrowserAtRoot();
+
+    // At module root, only show directories (hide nam.so, module.json, etc.)
+    if (atRoot) {
+        entries = entries.filter(e => e.isDirectory);
+    }
 
     if (entries.length === 0) {
         listEl.innerHTML = '<div class="asset-list-empty">Empty directory</div>';
@@ -1442,16 +1475,20 @@ function renderAssetList(entries) {
         size.className = 'asset-entry-size';
         size.textContent = entry.isDirectory ? '' : formatFileSize(entry.size);
 
-        const delBtn = document.createElement('button');
-        delBtn.className = 'asset-entry-delete';
-        delBtn.textContent = '\u2715';
-        delBtn.title = 'Delete';
-        delBtn.onclick = () => handleDeleteAssetEntry(entry.name, entry.isDirectory);
-
         row.appendChild(icon);
         row.appendChild(name);
         row.appendChild(size);
-        row.appendChild(delBtn);
+
+        // Hide delete button at root to prevent deleting top-level dirs
+        if (!atRoot) {
+            const delBtn = document.createElement('button');
+            delBtn.className = 'asset-entry-delete';
+            delBtn.textContent = '\u2715';
+            delBtn.title = 'Delete';
+            delBtn.onclick = () => handleDeleteAssetEntry(entry.name, entry.isDirectory);
+            row.appendChild(delBtn);
+        }
+
         listEl.appendChild(row);
     });
 }

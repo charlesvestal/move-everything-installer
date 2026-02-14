@@ -1396,24 +1396,21 @@ function compareVersions(installed, latestRelease, moduleCatalog) {
         const installedModule = installedMap.get(catalogModule.id);
 
         if (installedModule) {
+            // Merge: catalog provides base, device module.json can override assets
+            const merged = {
+                ...catalogModule,
+                currentVersion: installedModule.version
+            };
+            // Prefer device-side assets over catalog (allows updates without catalog changes)
+            if (installedModule.assets) {
+                merged.assets = installedModule.assets;
+            }
+
             // Module is installed - check if catalog version is newer
             if (catalogModule.version && isNewerVersion(catalogModule.version, installedModule.version)) {
-                result.upgradableModules.push({
-                    ...catalogModule,
-                    currentVersion: installedModule.version
-                });
-            } else if (catalogModule.version) {
-                // Version matches - up to date
-                result.upToDateModules.push({
-                    ...catalogModule,
-                    currentVersion: installedModule.version
-                });
+                result.upgradableModules.push(merged);
             } else {
-                // Could not fetch version - show as up to date (no upgrade info available)
-                result.upToDateModules.push({
-                    ...catalogModule,
-                    currentVersion: installedModule.version
-                });
+                result.upToDateModules.push(merged);
             }
         } else {
             // Module not installed - it's new
