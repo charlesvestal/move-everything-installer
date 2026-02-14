@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const backend = require('./backend');
@@ -17,6 +17,12 @@ function createWindow() {
     });
 
     mainWindow.loadFile(path.join(__dirname, '../ui/index.html'));
+
+    // Open external links in system browser instead of Electron
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        shell.openExternal(url);
+        return { action: 'deny' };
+    });
 
     // Set main window in backend for logging
     backend.setMainWindow(mainWindow);
@@ -89,6 +95,10 @@ ipcMain.handle('get_module_catalog', async () => {
 
 ipcMain.handle('get_latest_release', async () => {
     return await backend.getLatestRelease();
+});
+
+ipcMain.handle('check_installer_update', async () => {
+    return await backend.checkInstallerUpdate(app.getVersion());
 });
 
 ipcMain.handle('download_release', async (event, { url, destPath }) => {
