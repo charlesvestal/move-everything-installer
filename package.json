@@ -1,6 +1,6 @@
 {
   "name": "move-everything-installer",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Cross-platform installer for Move Everything",
   "main": "electron/main.js",
   "scripts": {
@@ -65,7 +65,7 @@
     "linux": {
       "target": [
         {
-          "target": "AppImage",
+          "target": "deb",
           "arch": [
             "x64",
             "arm64"
