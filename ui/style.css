@@ -1035,6 +1035,21 @@ button.secondary:hover {
     cursor: default;
 }
 
+.asset-hint {
+    padding: 0.5rem 1.25rem;
+    font-size: 0.85rem;
+    color: #aaa;
+    background: #1a1a1a;
+    border-bottom: 1px solid #333;
+}
+.asset-hint a {
+    color: #ff9933;
+    text-decoration: underline;
+}
+.asset-hint a:hover {
+    color: #ffb366;
+}
+
 .asset-toolbar {
     display: flex;
     gap: 0.5rem;

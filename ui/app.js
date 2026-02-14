@@ -1383,6 +1383,19 @@ function openAssetBrowser(moduleId, moduleName, componentType, assets) {
     document.getElementById('asset-browser-title').textContent = `${moduleName} - Manage ${assets.label}`;
     document.getElementById('asset-browser-list').innerHTML = '';
     document.getElementById('asset-browser-breadcrumb').innerHTML = '';
+
+    const hintEl = document.getElementById('asset-browser-hint');
+    if (assets.hint) {
+        let hintHTML = assets.hint;
+        if (assets.hint_url) {
+            const label = assets.hint_url_label || assets.hint_url;
+            hintHTML += ` <a href="${assets.hint_url}" target="_blank">${label}</a>`;
+        }
+        hintEl.innerHTML = hintHTML;
+        hintEl.style.display = 'block';
+    } else {
+        hintEl.style.display = 'none';
+    }
     setAssetStatus('', null);
     showAssetSpinner(true);
     document.getElementById('asset-browser-modal').style.display = 'flex';
