@@ -39,9 +39,6 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
 
@@ -54,19 +51,16 @@ jobs:
         run: npm ci
 
       - name: Build installer
-        run: npx electron-builder --linux --${{ matrix.arch }} --publish never
+        run: npx electron-builder --linux --publish never
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: installer-linux-${{ matrix.arch }}
+          name: installer-linux
           path: dist/*.AppImage
 
   build-windows:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
 
@@ -79,12 +73,12 @@ jobs:
         run: npm ci
 
       - name: Build installer
-        run: npx electron-builder --win --${{ matrix.arch }} --publish never
+        run: npx electron-builder --win --publish never
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: installer-win-${{ matrix.arch }}
+          name: installer-win
           path: dist/*.exe
 
   release:
@@ -99,21 +93,6 @@ jobs:
 
       - name: List artifacts
         run: find artifacts -type f | sort
-
-      - name: Deduplicate artifacts
-        run: |
-          # electron-builder portable may produce a generic win.exe alongside arch-specific ones
-          cd artifacts
-          for f in *.exe; do
-            # Remove generic (no arch) exe if arch-specific versions exist
-            base="${f%-win.exe}"
-            if [ "$base" != "$f" ] && (ls "${base}-win-x64.exe" 2>/dev/null || ls "${base}-win-arm64.exe" 2>/dev/null); then
-              echo "Removing duplicate: $f"
-              rm "$f"
-            fi
-          done
-          echo "Final artifacts:"
-          ls -la
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
