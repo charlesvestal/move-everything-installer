@@ -65,6 +65,12 @@ function showScreen(screenName) {
     document.getElementById(`screen-${screenName}`).classList.add('active');
     state.currentScreen = screenName;
 
+    // Stop SSH confirmation polling when leaving the confirm screen
+    if (screenName !== 'confirm' && confirmationPollInterval) {
+        clearInterval(confirmationPollInterval);
+        confirmationPollInterval = null;
+    }
+
     // Reset installing screen state so stale progress/checklist never leaks
     if (screenName === 'installing') {
         document.getElementById('install-checklist').innerHTML = '';
@@ -335,7 +341,16 @@ async function proceedToSshSetup(baseUrl) {
         // Start polling for connection access
         startConfirmationPolling();
     } catch (error) {
-        showError('Connection setup failed: ' + error);
+        // SSH key submission failed — clear stale cookie and restart auth flow
+        console.log('[DEBUG] SSH setup failed, clearing cookie and restarting auth...', error);
+        await window.installer.invoke('clear_saved_cookie');
+        try {
+            await window.installer.invoke('request_challenge', { baseUrl });
+        } catch (challengeErr) {
+            console.error('[DEBUG] Challenge request also failed:', challengeErr);
+        }
+        showScreen('code-entry');
+        setupCodeEntry();
     }
 }
 
@@ -348,6 +363,12 @@ async function startConfirmationPolling() {
 
     confirmationPollInterval = setInterval(async () => {
         try {
+            // Stop if we've navigated away from the confirm screen
+            if (state.currentScreen !== 'confirm') {
+                clearInterval(confirmationPollInterval);
+                confirmationPollInterval = null;
+                return;
+            }
             console.log('[DEBUG] Polling SSH connection...');
             const connected = await window.installer.invoke('test_ssh', {
                 hostname: state.deviceIp
@@ -356,6 +377,7 @@ async function startConfirmationPolling() {
             console.log('[DEBUG] SSH connected:', connected);
             if (connected) {
                 clearInterval(confirmationPollInterval);
+                confirmationPollInterval = null;
                 console.log('[DEBUG] SSH confirmed, checking versions...');
                 await checkVersions();
             }
@@ -368,8 +390,9 @@ async function startConfirmationPolling() {
 function cancelConfirmation() {
     if (confirmationPollInterval) {
         clearInterval(confirmationPollInterval);
+        confirmationPollInterval = null;
     }
-    showScreen('code-entry');
+    showScreen('warning');
 }
 
 function cancelDiscovery() {

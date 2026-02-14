@@ -53,6 +53,10 @@ ipcMain.handle('get_saved_cookie', async () => {
     return backend.getSavedCookie();
 });
 
+ipcMain.handle('clear_saved_cookie', async () => {
+    return await backend.clearSavedCookie();
+});
+
 ipcMain.handle('request_challenge', async (event, { baseUrl }) => {
     return await backend.requestChallenge(baseUrl);
 });

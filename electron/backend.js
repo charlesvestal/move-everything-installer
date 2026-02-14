@@ -234,6 +234,18 @@ function getSavedCookie() {
     return savedCookie;
 }
 
+async function clearSavedCookie() {
+    savedCookie = null;
+    try {
+        if (fs.existsSync(cookieStore)) {
+            await rm(cookieStore);
+        }
+    } catch (err) {
+        console.error('Failed to delete cookie file:', err);
+    }
+    console.log('[DEBUG] Saved cookie cleared');
+}
+
 async function requestChallenge(baseUrl) {
     try {
         const response = await httpClient.post(`${baseUrl}/api/v1/challenge`, {});
@@ -410,6 +422,22 @@ async function submitSshKeyWithAuth(baseUrl, pubkey) {
             throw new Error(`SSH key submission failed: ${response.status} - ${JSON.stringify(response.data)}`);
         }
 
+        // Fix /data/authorized_keys permissions via root SSH so ableton can use it
+        // (Move creates the file as 600 root:root, but sshd needs it readable for ableton)
+        const hostIp = cachedDeviceIp || new URL(baseUrl).hostname;
+        const moveKeyPath = path.join(os.homedir(), '.ssh', 'move_key');
+        const keyPath = fs.existsSync(moveKeyPath) ? moveKeyPath : path.join(os.homedir(), '.ssh', 'id_rsa');
+        if (fs.existsSync(keyPath)) {
+            try {
+                const { exec } = require('child_process');
+                const execAsync = promisify(exec);
+                await execAsync(`ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes root@${hostIp} "chmod 644 /data/authorized_keys"`, { timeout: 10000 });
+                console.log('[DEBUG] Fixed /data/authorized_keys permissions');
+            } catch (fixErr) {
+                console.log('[DEBUG] Could not fix authorized_keys permissions (non-fatal):', fixErr.message);
+            }
+        }
+
         return true;
     } catch (err) {
         throw new Error(`Failed to submit SSH key: ${err.message}`);
@@ -456,39 +484,31 @@ async function testSsh(hostname) {
         try {
             console.log('[DEBUG] Trying native SSH...');
 
-            // Try ableton@move.local first, then root@move.local
-            const users = ['ableton', 'root'];
+            // Only test ableton — that's the user install.sh needs
+            try {
+                console.log(`[DEBUG] Testing SSH as ableton@${hostIp} using native ssh`);
 
-            for (const username of users) {
-                try {
-                    console.log(`[DEBUG] Testing SSH as ${username}@${hostIp} using native ssh`);
+                const sshCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes ableton@${hostIp} "echo test"`;
+                const { stdout } = await execAsync(sshCmd, { timeout: 8000 });
 
-                    // Test connection with a simple command
-                    const sshCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes ${username}@${hostIp} "echo test"`;
-                    const { stdout } = await execAsync(sshCmd, { timeout: 8000 });
+                if (stdout.trim() === 'test') {
+                    console.log(`[DEBUG] Native SSH works as ableton@${hostIp}`);
 
-                    if (stdout.trim() === 'test') {
-                        console.log(`[DEBUG] Native SSH works as ${username}@${hostIp}`);
-
-                        // If connected as ableton, try to fix authorized_keys permissions (non-fatal)
-                        if (username === 'ableton') {
-                            try {
-                                console.log('[DEBUG] Fixing authorized_keys permissions via native SSH');
-                                const chmodCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o BatchMode=yes ${username}@${hostIp} "chmod 600 ~/.ssh/authorized_keys 2>/dev/null; chmod 700 ~/.ssh 2>/dev/null; true"`;
-                                await execAsync(chmodCmd, { timeout: 5000 });
-                            } catch (chmodErr) {
-                                console.log('[DEBUG] chmod authorized_keys failed (non-fatal):', chmodErr.message);
-                            }
-                        }
-
-                        return true;
+                    // Fix authorized_keys permissions (non-fatal)
+                    try {
+                        const chmodCmd = `ssh -i "${keyPath}" -o StrictHostKeyChecking=no -o BatchMode=yes ableton@${hostIp} "chmod 600 ~/.ssh/authorized_keys 2>/dev/null; chmod 700 ~/.ssh 2>/dev/null; true"`;
+                        await execAsync(chmodCmd, { timeout: 5000 });
+                    } catch (chmodErr) {
+                        console.log('[DEBUG] chmod authorized_keys failed (non-fatal):', chmodErr.message);
                     }
-                } catch (userErr) {
-                    console.log(`[DEBUG] Native SSH failed for ${username}:`, userErr.message);
+
+                    return true;
                 }
+            } catch (userErr) {
+                console.log(`[DEBUG] Native SSH failed for ableton:`, userErr.message);
             }
 
-            console.log('[DEBUG] Native SSH failed for all users, trying ssh2 library...');
+            console.log('[DEBUG] Native SSH failed, trying ssh2 library...');
         } catch (nativeSshErr) {
             console.log('[DEBUG] Native SSH not available, using ssh2 library');
         }
@@ -498,7 +518,7 @@ async function testSsh(hostname) {
         const privateKey = fs.readFileSync(keyPath);
         console.log('[DEBUG] testSsh: Private key length:', privateKey.length);
 
-        const users = ['ableton', 'root'];
+        const users = ['ableton'];
 
         for (const username of users) {
             console.log(`[DEBUG] Testing SSH as ${username}@${hostIp} using ssh2...`);
@@ -992,6 +1012,17 @@ async function installMain(tarballPath, hostname, flags = []) {
         const { promisify } = require('util');
         const execAsync = promisify(exec);
 
+        // Clear stale host keys for this device (e.g. after a reformat)
+        // install.sh uses StrictHostKeyChecking=accept-new which rejects changed keys
+        try {
+            await execAsync(`ssh-keygen -R ${hostIp} 2>/dev/null`, { timeout: 5000 });
+            await execAsync(`ssh-keygen -R ${hostname} 2>/dev/null`, { timeout: 5000 });
+            await execAsync(`ssh-keygen -R movedevice 2>/dev/null`, { timeout: 5000 });
+            console.log('[DEBUG] Cleared stale host keys');
+        } catch (err) {
+            // Non-fatal — keys may not exist
+        }
+
         // Find bash - use /bin/bash directly on macOS/Linux, find Git Bash on Windows
         const bashPath = process.platform === 'win32' ? await findGitBash() : '/bin/bash';
 
@@ -1456,7 +1487,7 @@ function getDiagnostics(deviceIp, errors) {
         arch: os.arch(),
         deviceIp,
         errors,
-        sshKeyExists: fs.existsSync(path.join(os.homedir(), '.ssh', 'id_rsa')),
+        sshKeyExists: fs.existsSync(path.join(os.homedir(), '.ssh', 'move_key')) || fs.existsSync(path.join(os.homedir(), '.ssh', 'id_rsa')),
         hasCookie: !!savedCookie
     };
 
@@ -1893,6 +1924,7 @@ module.exports = {
     setMainWindow,
     validateDevice,
     getSavedCookie,
+    clearSavedCookie,
     requestChallenge,
     submitAuthCode,
     findExistingSshKey,
