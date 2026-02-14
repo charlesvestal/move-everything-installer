@@ -637,6 +637,24 @@ function displayModules(modules) {
         }
     });
 
+    // Select All / Deselect All toggle
+    const toggleDiv = document.createElement('div');
+    toggleDiv.className = 'select-all-toggle';
+    const toggleLink = document.createElement('a');
+    toggleLink.href = '#';
+    toggleLink.id = 'toggle-select-all';
+    toggleLink.textContent = 'Deselect All';
+    toggleLink.onclick = (e) => {
+        e.preventDefault();
+        const checkboxes = categoriesDiv.querySelectorAll('input[type="checkbox"]');
+        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+        checkboxes.forEach(cb => cb.checked = !allChecked);
+        toggleLink.textContent = allChecked ? 'Select All' : 'Deselect All';
+        updateSelectedModules();
+    };
+    toggleDiv.appendChild(toggleLink);
+    categoriesDiv.appendChild(toggleDiv);
+
     // Display categories with checkboxes (fresh install mode only)
     Object.entries(categories).forEach(([key, category]) => {
         if (category.modules.length === 0) return;
@@ -714,6 +732,13 @@ function updateSelectedModules() {
     state.selectedModules = Array.from(checkboxes)
         .filter(cb => cb.checked)
         .map(cb => cb.id.replace('module-', ''));
+
+    // Sync toggle label
+    const toggleLink = document.getElementById('toggle-select-all');
+    if (toggleLink) {
+        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+        toggleLink.textContent = allChecked ? 'Deselect All' : 'Select All';
+    }
 
     updateInstallButtonState();
 }
@@ -2094,6 +2119,19 @@ document.addEventListener('DOMContentLoaded', async () => {
             `;
         }
     } catch (e) { /* ignore */ }
+
+    // Check for installer updates
+    try {
+        const update = await window.installer.invoke('check_installer_update');
+        if (update && update.updateAvailable) {
+            const banner = document.getElementById('update-banner');
+            document.getElementById('update-banner-text').textContent =
+                `A new installer version (v${update.latestVersion}) is available.`;
+            const link = document.getElementById('update-banner-link');
+            link.href = update.url;
+            banner.style.display = 'block';
+        }
+    } catch (e) { /* non-critical */ }
 
     // Warning screen
     document.getElementById('btn-accept-warning').onclick = async (e) => {

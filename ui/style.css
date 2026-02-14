@@ -238,6 +238,22 @@ button.secondary:hover {
     margin-bottom: 2rem;
 }
 
+.select-all-toggle {
+    text-align: right;
+    margin-bottom: 0.75rem;
+}
+
+.select-all-toggle a {
+    color: #ff9933;
+    text-decoration: underline;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.select-all-toggle a:hover {
+    color: #ffb366;
+}
+
 .module-category {
     margin-bottom: 2rem;
 }
@@ -460,6 +476,30 @@ button.secondary:hover {
 }
 
 /* Warning Screen */
+/* Update Banner */
+.update-banner {
+    padding: 0.6rem 1.25rem;
+    font-size: 0.85rem;
+    color: #ccc;
+    background: #2a2a1a;
+    border: 1px solid #ff9933;
+    border-radius: 6px;
+    margin: 0 auto 1rem auto;
+    max-width: 600px;
+    text-align: center;
+}
+
+.update-banner a {
+    color: #ff9933;
+    font-weight: bold;
+    text-decoration: underline;
+    margin-left: 0.5rem;
+}
+
+.update-banner a:hover {
+    color: #ffb366;
+}
+
 .warning-box {
     background: #fff3cd;
     border: 2px solid #ffc107;
@@ -943,6 +983,7 @@ button.secondary:hover {
     font-size: 0.8rem;
     text-decoration: none;
     cursor: pointer;
+    margin: 0 0.5rem;
 }
 
 #app-footer a:hover {

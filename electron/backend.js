@@ -754,6 +754,34 @@ async function getLatestRelease() {
     }
 }
 
+async function getLatestInstallerRelease() {
+    try {
+        const response = await httpClient.get(
+            'https://api.github.com/repos/charlesvestal/move-everything-installer/releases/latest',
+            { headers: { 'User-Agent': 'MoveEverything-Installer' } }
+        );
+        if (response.status === 200 && response.data.tag_name) {
+            return {
+                version: response.data.tag_name.replace(/^v/, ''),
+                url: response.data.html_url
+            };
+        }
+    } catch (err) {
+        console.error('[DEBUG] Installer version check failed:', err.message);
+    }
+    return null;
+}
+
+async function checkInstallerUpdate(currentVersion) {
+    const release = await getLatestInstallerRelease();
+    if (!release) return null;
+    return {
+        updateAvailable: isNewerVersion(release.version, currentVersion),
+        latestVersion: release.version,
+        url: release.url
+    };
+}
+
 async function downloadRelease(url, destPath) {
     try {
         // If destPath is just a filename or starts with /tmp/, use system temp dir
@@ -1893,5 +1921,6 @@ module.exports = {
     uninstallMoveEverything,
     testSshFormats,
     cleanDeviceTmp,
-    fixPermissions
+    fixPermissions,
+    checkInstallerUpdate
 };
