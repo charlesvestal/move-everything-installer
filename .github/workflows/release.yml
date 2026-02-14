@@ -94,6 +94,21 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | sort
 
+      - name: Deduplicate Windows artifacts
+        run: |
+          cd artifacts
+          # electron-builder portable produces a generic win.exe alongside arch-specific ones
+          for f in *-win.exe; do
+            [ -f "$f" ] || continue
+            base="${f%-win.exe}"
+            if ls "${base}-win-x64.exe" 2>/dev/null || ls "${base}-win-arm64.exe" 2>/dev/null; then
+              echo "Removing duplicate: $f"
+              rm "$f"
+            fi
+          done
+          echo "Final artifacts:"
+          ls -la
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
