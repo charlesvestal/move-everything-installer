@@ -1521,13 +1521,19 @@ async function setScreenReaderState(hostname, enabled) {
         const value = enabled ? '1' : '0';
         await sshExec(hostIp, `echo "${value}" > /data/UserData/move-anything/config/screen_reader_state.txt`);
 
-        // Restart move-anything process so it picks up the new state
-        console.log('[DEBUG] Restarting move-anything...');
-        await sshExec(hostIp, 'killall move-anything 2>/dev/null || true', { username: 'root' });
+        // Restart Move via init service so it picks up the new state
+        // (matches the restart sequence in install.sh)
+        console.log('[DEBUG] Restarting Move...');
+        await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
+        await sshExec(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExec(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
+        await sshExec(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
 
         return {
             enabled: enabled,
-            message: `Screen reader ${enabled ? 'enabled' : 'disabled'}. Move Everything is restarting.`
+            message: `Screen reader ${enabled ? 'enabled' : 'disabled'}. Move is restarting.`
         };
     } catch (err) {
         console.error('[DEBUG] Screen reader toggle error:', err.message);
