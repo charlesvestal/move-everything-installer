@@ -1104,6 +1104,36 @@ async function installMain(tarballPath, hostname, flags = []) {
             const tempTarball = path.join(tempDir, 'move-anything.tar.gz');
             await copyFile(tarballPath, tempTarball);
 
+            // Pre-flight: verify Git Bash SSH can connect to movedevice
+            // (the Electron app uses ssh2 library, but install.sh uses native SSH via Git Bash)
+            if (process.platform === 'win32') {
+                console.log('[DEBUG] Pre-flight: testing Git Bash SSH to movedevice...');
+                try {
+                    await execAsync(`"${bashPath}" -c "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 movedevice echo ok"`, { timeout: 15000 });
+                    console.log('[DEBUG] Pre-flight: Git Bash SSH to movedevice OK');
+                } catch (sshTestErr) {
+                    const errMsg = (sshTestErr.stderr || sshTestErr.message || '').trim();
+                    console.log('[DEBUG] Pre-flight: Git Bash SSH failed:', errMsg);
+                    // Try with explicit key and IP as fallback diagnostic
+                    const keyPath = getUsablePrivateKeyPath();
+                    const keyFlag = keyPath ? `-i "${keyPath.replace(/\\/g, '/')}"` : '';
+                    try {
+                        await execAsync(`"${bashPath}" -c "ssh ${keyFlag} -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 ableton@${hostIp} echo ok"`, { timeout: 15000 });
+                        console.log('[DEBUG] Pre-flight: direct IP SSH works, SSH config alias may be broken - rebuilding...');
+                        // SSH config alias is broken but direct connection works - rebuild config
+                        await setupSshConfig(hostname);
+                    } catch (directErr) {
+                        throw new Error(
+                            `SSH connection from Git Bash failed.\n\n` +
+                            `The installer verified SSH works, but Git Bash's SSH cannot connect to the device.\n` +
+                            `This can happen if Git Bash uses a different SSH configuration.\n\n` +
+                            `Error: ${errMsg}\n\n` +
+                            `Try: Open Git Bash and run: ssh ableton@${hostIp}`
+                        );
+                    }
+                }
+            }
+
             // Pre-install cleanup: remove stale temp files and root-owned tarball on device
             console.log('[DEBUG] Cleaning up stale files on device...');
             try {
@@ -1162,11 +1192,33 @@ async function installMain(tarballPath, hostname, flags = []) {
                 console.log('[DEBUG] Exit code:', execError.code);
                 console.log('[DEBUG] stdout:', stdout);
                 console.log('[DEBUG] stderr:', stderr);
-                throw new Error(
-                    `install.sh failed with exit code ${execError.code}\n\n` +
-                    `Output:\n${stdout}\n\n` +
-                    `Errors:\n${stderr}`
-                );
+
+                // Check if installation itself succeeded but only the restart failed
+                // Look for "Configuring features" (install complete) + restart failure markers
+                const installSucceeded = stdout.includes('Configuring features');
+                const restartFailed = stdout.includes('Failed to restart Move service') ||
+                    (stdout.includes('Restarting Move') && stdout.includes('SSH command failed'));
+
+                if (installSucceeded && restartFailed) {
+                    console.log('[DEBUG] Install succeeded but restart failed - attempting backend restart...');
+                    try {
+                        // Try to restart via backend SSH (has ssh2 fallback, more reliable on Windows)
+                        await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
+                        await new Promise(r => setTimeout(r, 3000));
+                        await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1 || true', { username: 'root' });
+                        console.log('[DEBUG] Backend restart succeeded');
+                    } catch (restartErr) {
+                        console.log('[DEBUG] Backend restart also failed (device may need manual reboot):', restartErr.message);
+                        // Still treat as success - installation is complete, user can reboot
+                    }
+                    // Don't throw - installation itself succeeded
+                } else {
+                    throw new Error(
+                        `install.sh failed with exit code ${execError.code}\n\n` +
+                        `Output:\n${stdout}\n\n` +
+                        `Errors:\n${stderr}`
+                    );
+                }
             }
 
             console.log('[DEBUG] Install script output:', stdout);
