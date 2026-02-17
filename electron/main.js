@@ -192,6 +192,14 @@ ipcMain.handle('set_screen_reader_state', async (event, { hostname, enabled }) =
     return await backend.setScreenReaderState(hostname, enabled);
 });
 
+ipcMain.handle('get_standalone_status', async (event, { hostname }) => {
+    return await backend.getStandaloneStatus(hostname);
+});
+
+ipcMain.handle('set_standalone_state', async (event, { hostname, enabled }) => {
+    return await backend.setStandaloneState(hostname, enabled);
+});
+
 ipcMain.handle('uninstall_move_everything', async (event, { hostname }) => {
     return await backend.uninstallMoveEverything(hostname);
 });

@@ -51,6 +51,7 @@ const state = {
     installType: 'complete',
     selectedModules: [],
     enableScreenReader: false,
+    enableStandalone: false,
     sshPassword: null,
     errors: [],
     versionInfo: null,
@@ -634,6 +635,12 @@ function setupInstallationOptions() {
     // Handle screen reader checkbox
     screenReaderCheckbox.addEventListener('change', (e) => {
         state.enableScreenReader = e.target.checked;
+    });
+
+    // Handle standalone checkbox
+    const standaloneCheckbox = document.getElementById('enable-standalone');
+    standaloneCheckbox.addEventListener('change', (e) => {
+        state.enableStandalone = e.target.checked;
     });
 
     // Initialize
@@ -1801,10 +1808,12 @@ async function startInstallation() {
 
             // Determine installation flags based on mode
             const installFlags = [];
+            if (!state.enableStandalone) {
+                installFlags.push('--disable-standalone');
+            }
             if (state.installType === 'screenreader') {
                 installFlags.push('--enable-screen-reader');
                 installFlags.push('--disable-shadow-ui');
-                installFlags.push('--disable-standalone');
             } else if (state.enableScreenReader) {
                 installFlags.push('--enable-screen-reader');
             }
@@ -1915,7 +1924,7 @@ function populateSuccessScreen(options = {}) {
 
     const isScreenReaderOnly = state.installType === 'screenreader';
     const hasShadowUi = !isScreenReaderOnly;
-    const hasStandalone = !isScreenReaderOnly;
+    const hasStandalone = state.enableStandalone && !isScreenReaderOnly;
 
     let html = '<p><strong>Getting Started:</strong></p>';
     html += '<ul style="margin: 0.5rem 0 0 1.5rem; color: #b8b8b8; list-style: none; padding: 0;">';
@@ -2264,6 +2273,51 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
+    document.getElementById('link-standalone').onclick = async (e) => {
+        e.preventDefault();
+        const link = e.target;
+        const originalText = link.textContent;
+        try {
+            const hostname = state.deviceIp;
+
+            link.textContent = 'Checking...';
+            link.style.pointerEvents = 'none';
+
+            const currentStatus = await window.installer.invoke('get_standalone_status', { hostname });
+
+            const action = currentStatus ? 'disable' : 'enable';
+            const confirmMsg = currentStatus
+                ? 'Standalone mode is currently enabled. Disable it?'
+                : 'Enable standalone mode?\n\nStandalone mode contains developer-focused features and does not interact with regular Move operation.';
+
+            if (!confirm(confirmMsg)) {
+                link.textContent = originalText;
+                link.style.pointerEvents = '';
+                return;
+            }
+
+            link.textContent = `${action === 'enable' ? 'Enabling' : 'Disabling'}...`;
+
+            const result = await window.installer.invoke('set_standalone_state', {
+                hostname,
+                enabled: !currentStatus
+            });
+
+            link.textContent = result.message || 'Done';
+            setTimeout(() => {
+                link.textContent = originalText;
+                link.style.pointerEvents = '';
+            }, 2000);
+        } catch (error) {
+            console.error('Failed to toggle standalone mode:', error);
+            link.textContent = 'Failed';
+            setTimeout(() => {
+                link.textContent = originalText;
+                link.style.pointerEvents = '';
+            }, 2000);
+        }
+    };
+
     document.getElementById('link-repair').onclick = async (e) => {
         e.preventDefault();
         const vi = state.versionInfo;
@@ -2303,6 +2357,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             updateInstallProgress('Reinstalling Move Everything core...', 20);
             const installFlags = [];
+            if (!state.enableStandalone) installFlags.push('--disable-standalone');
             if (state.enableScreenReader) installFlags.push('--enable-screen-reader');
 
             await window.installer.invoke('install_main', {

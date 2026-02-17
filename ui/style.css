@@ -634,6 +634,14 @@ button.secondary:hover {
     color: #e0e0e0;
 }
 
+.option-warning {
+    font-size: 0.8rem;
+    color: #cc8800;
+    margin: 0.25rem 0 0 0;
+    padding: 0 0.5rem;
+    line-height: 1.4;
+}
+
 /* Version Check Screen */
 #version-info {
     margin-top: 2rem;
