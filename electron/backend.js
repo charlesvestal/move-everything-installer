@@ -290,20 +290,74 @@ async function submitAuthCode(baseUrl, code) {
     }
 }
 
-function findExistingSshKey() {
-    const sshDir = path.join(os.homedir(), '.ssh');
+// Check if a private key file is encrypted with a passphrase
+function isKeyEncrypted(privateKeyPath) {
+    try {
+        if (!fs.existsSync(privateKeyPath)) return false;
+        const content = fs.readFileSync(privateKeyPath, 'utf8');
+        // Detects both old-style PEM encryption (DEK-Info/Proc-Type: ENCRYPTED)
+        // and new OpenSSH format encryption (bcrypt/aes256-ctr in openssh-key-v1)
+        return content.includes('ENCRYPTED');
+    } catch (err) {
+        console.log(`[DEBUG] Could not read key ${privateKeyPath}: ${err.message}`);
+        return false;
+    }
+}
 
-    // Prefer move_key.pub (ED25519) over id_rsa.pub
-    const moveKeyPath = path.join(sshDir, 'move_key.pub');
+// Get the usable (non-encrypted) private key path, or null if none available
+function getUsablePrivateKeyPath() {
+    const sshDir = path.join(os.homedir(), '.ssh');
+    const moveKeyPath = path.join(sshDir, 'move_key');
+    const rsaKeyPath = path.join(sshDir, 'id_rsa');
+
+    // Check move_key first
     if (fs.existsSync(moveKeyPath)) {
-        console.log('[DEBUG] Found move_key.pub');
+        if (isKeyEncrypted(moveKeyPath)) {
+            console.log('[DEBUG] move_key is passphrase-protected, will regenerate');
+            return null; // Caller should regenerate
+        }
         return moveKeyPath;
     }
 
-    const rsaKeyPath = path.join(sshDir, 'id_rsa.pub');
+    // Fall back to id_rsa, but skip if encrypted
     if (fs.existsSync(rsaKeyPath)) {
-        console.log('[DEBUG] Found id_rsa.pub');
+        if (isKeyEncrypted(rsaKeyPath)) {
+            console.log('[DEBUG] id_rsa is passphrase-protected, skipping');
+            return null;
+        }
         return rsaKeyPath;
+    }
+
+    return null;
+}
+
+function findExistingSshKey() {
+    const sshDir = path.join(os.homedir(), '.ssh');
+
+    // Prefer move_key.pub (ED25519) over id_rsa.pub, but skip encrypted private keys
+    const moveKeyPubPath = path.join(sshDir, 'move_key.pub');
+    const moveKeyPath = path.join(sshDir, 'move_key');
+    if (fs.existsSync(moveKeyPubPath)) {
+        if (isKeyEncrypted(moveKeyPath)) {
+            console.log('[DEBUG] Found move_key.pub but private key is encrypted, will regenerate');
+            // Delete the encrypted move_key so generateNewSshKey will recreate it
+            try { fs.unlinkSync(moveKeyPath); } catch (e) {}
+            try { fs.unlinkSync(moveKeyPubPath); } catch (e) {}
+            return null;
+        }
+        console.log('[DEBUG] Found move_key.pub');
+        return moveKeyPubPath;
+    }
+
+    const rsaKeyPubPath = path.join(sshDir, 'id_rsa.pub');
+    const rsaKeyPath = path.join(sshDir, 'id_rsa');
+    if (fs.existsSync(rsaKeyPubPath)) {
+        if (isKeyEncrypted(rsaKeyPath)) {
+            console.log('[DEBUG] Found id_rsa.pub but private key is passphrase-protected, skipping');
+            return null;
+        }
+        console.log('[DEBUG] Found id_rsa.pub');
+        return rsaKeyPubPath;
     }
 
     return null;
@@ -425,9 +479,8 @@ async function submitSshKeyWithAuth(baseUrl, pubkey) {
         // Fix /data/authorized_keys permissions via root SSH so ableton can use it
         // (Move creates the file as 600 root:root, but sshd needs it readable for ableton)
         const hostIp = cachedDeviceIp || new URL(baseUrl).hostname;
-        const moveKeyPath = path.join(os.homedir(), '.ssh', 'move_key');
-        const keyPath = fs.existsSync(moveKeyPath) ? moveKeyPath : path.join(os.homedir(), '.ssh', 'id_rsa');
-        if (fs.existsSync(keyPath)) {
+        const keyPath = getUsablePrivateKeyPath();
+        if (keyPath) {
             try {
                 const { exec } = require('child_process');
                 const execAsync = promisify(exec);
@@ -446,15 +499,13 @@ async function submitSshKeyWithAuth(baseUrl, pubkey) {
 
 async function testSsh(hostname) {
     try {
-        // Use move_key if it exists, otherwise id_rsa
-        const moveKeyPath = path.join(os.homedir(), '.ssh', 'move_key');
-        const keyPath = fs.existsSync(moveKeyPath) ? moveKeyPath : path.join(os.homedir(), '.ssh', 'id_rsa');
+        // Use move_key if it exists, otherwise id_rsa (skip encrypted keys)
+        const keyPath = getUsablePrivateKeyPath();
 
-        console.log('[DEBUG] testSsh: Looking for key at:', keyPath);
-        console.log('[DEBUG] testSsh: Key exists:', fs.existsSync(keyPath));
+        console.log('[DEBUG] testSsh: Usable key path:', keyPath);
 
-        if (!fs.existsSync(keyPath)) {
-            console.log('[DEBUG] No SSH key found for testing');
+        if (!keyPath) {
+            console.log('[DEBUG] No usable SSH key found for testing');
             return false;
         }
 
@@ -622,14 +673,13 @@ async function setupSshConfig(hostname = 'move.local') {
     // Strip brackets from IPv6 if present
     const deviceIp = cachedDeviceIp ? cachedDeviceIp.replace(/^\[|\]$/g, '') : null;
 
-    // Use whichever SSH key actually exists (match order from findExistingSshKey/testSsh)
+    // Use whichever SSH key actually exists and is usable (skip encrypted keys)
+    const usableKeyPath = getUsablePrivateKeyPath();
     let identityFile = '~/.ssh/id_ed25519';
-    if (fs.existsSync(path.join(sshDir, 'move_key'))) {
-        identityFile = '~/.ssh/move_key';
+    if (usableKeyPath) {
+        identityFile = '~/' + path.relative(os.homedir(), usableKeyPath);
     } else if (fs.existsSync(path.join(sshDir, 'id_ed25519'))) {
         identityFile = '~/.ssh/id_ed25519';
-    } else if (fs.existsSync(path.join(sshDir, 'id_rsa'))) {
-        identityFile = '~/.ssh/id_rsa';
     }
 
     // Escape hostname for use in regex
@@ -833,9 +883,11 @@ async function sshExec(hostname, command, { username = 'ableton' } = {}) {
     // Prefer cached IP, but allow fallback to hostname for SSH (native ssh can resolve .local)
     const hostIp = cachedDeviceIp || hostname;
 
-    // Use move_key if it exists, otherwise id_rsa
-    const moveKeyPath = path.join(os.homedir(), '.ssh', 'move_key');
-    const keyPath = fs.existsSync(moveKeyPath) ? moveKeyPath : path.join(os.homedir(), '.ssh', 'id_rsa');
+    // Use move_key if it exists, otherwise id_rsa (skip encrypted keys)
+    const keyPath = getUsablePrivateKeyPath();
+    if (!keyPath) {
+        throw new Error('No usable SSH key found (keys may be passphrase-protected)');
+    }
 
     // Try native SSH first
     try {
@@ -898,8 +950,10 @@ async function sshExec(hostname, command, { username = 'ableton' } = {}) {
 // Helper to upload file via SFTP
 async function sftpUpload(hostname, localPath, remotePath, { username = 'ableton' } = {}) {
     const hostIp = cachedDeviceIp || hostname;
-    const moveKeyPath = path.join(os.homedir(), '.ssh', 'move_key');
-    const keyPath = fs.existsSync(moveKeyPath) ? moveKeyPath : path.join(os.homedir(), '.ssh', 'id_rsa');
+    const keyPath = getUsablePrivateKeyPath();
+    if (!keyPath) {
+        throw new Error('No usable SSH key found (keys may be passphrase-protected)');
+    }
 
     return new Promise((resolve, reject) => {
         const conn = new Client();
@@ -1487,7 +1541,7 @@ function getDiagnostics(deviceIp, errors) {
         arch: os.arch(),
         deviceIp,
         errors,
-        sshKeyExists: fs.existsSync(path.join(os.homedir(), '.ssh', 'move_key')) || fs.existsSync(path.join(os.homedir(), '.ssh', 'id_rsa')),
+        sshKeyExists: !!getUsablePrivateKeyPath(),
         hasCookie: !!savedCookie
     };
 
@@ -1538,6 +1592,53 @@ async function setScreenReaderState(hostname, enabled) {
     } catch (err) {
         console.error('[DEBUG] Screen reader toggle error:', err.message);
         throw new Error(`Failed to set screen reader state: ${err.message}`);
+    }
+}
+
+async function getStandaloneStatus(hostname) {
+    try {
+        const hostIp = cachedDeviceIp || hostname;
+
+        const featuresRaw = (await sshExec(hostIp, 'cat /data/UserData/move-anything/config/features.json 2>/dev/null || echo "{}"')).trim();
+        const features = JSON.parse(featuresRaw);
+        return features.standalone_enabled === true;
+    } catch (err) {
+        console.log('[DEBUG] Could not read standalone status:', err.message);
+        return false;
+    }
+}
+
+async function setStandaloneState(hostname, enabled) {
+    try {
+        const hostIp = cachedDeviceIp || hostname;
+        console.log('[DEBUG] Setting standalone to:', enabled);
+
+        // Read existing features.json to preserve other settings
+        const featuresRaw = (await sshExec(hostIp, 'cat /data/UserData/move-anything/config/features.json 2>/dev/null || echo "{}"')).trim();
+        const features = JSON.parse(featuresRaw);
+        features.standalone_enabled = enabled;
+
+        // Write updated features.json
+        const featuresJson = JSON.stringify(features, null, 2);
+        await sshExec(hostIp, `mkdir -p /data/UserData/move-anything/config`);
+        await sshExec(hostIp, `cat > /data/UserData/move-anything/config/features.json << 'FEATEOF'\n${featuresJson}\nFEATEOF`);
+
+        // Restart Move via init service so it picks up the new state
+        console.log('[DEBUG] Restarting Move...');
+        await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
+        await sshExec(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExec(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
+        await sshExec(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
+
+        return {
+            enabled: enabled,
+            message: `Standalone mode ${enabled ? 'enabled' : 'disabled'}. Move is restarting.`
+        };
+    } catch (err) {
+        console.error('[DEBUG] Standalone toggle error:', err.message);
+        throw new Error(`Failed to set standalone state: ${err.message}`);
     }
 }
 
@@ -1956,6 +2057,8 @@ module.exports = {
     getDiagnostics,
     getScreenReaderStatus,
     setScreenReaderState,
+    getStandaloneStatus,
+    setStandaloneState,
     uninstallMoveEverything,
     testSshFormats,
     cleanDeviceTmp,
