@@ -616,15 +616,6 @@ function setupInstallationOptions() {
                 moduleCategories.style.display = 'none';
             }
 
-            // Auto-check screen reader for screen reader only mode
-            if (e.target.value === 'screenreader') {
-                screenReaderCheckbox.checked = true;
-                screenReaderCheckbox.disabled = true;
-                state.enableScreenReader = true;
-            } else {
-                screenReaderCheckbox.disabled = false;
-            }
-
             updateModuleSummary();
             updateInstallButtonState();
         });
@@ -1811,10 +1802,7 @@ async function startInstallation() {
             if (!state.enableStandalone) {
                 installFlags.push('--disable-standalone');
             }
-            if (state.installType === 'screenreader') {
-                installFlags.push('--enable-screen-reader');
-                installFlags.push('--disable-shadow-ui');
-            } else if (state.enableScreenReader) {
+            if (state.enableScreenReader) {
                 installFlags.push('--enable-screen-reader');
             }
 
@@ -1922,23 +1910,17 @@ function populateSuccessScreen(options = {}) {
     instructionEl.textContent = 'Move Everything has been successfully installed on your device.';
     backBtn.style.display = '';
 
-    const isScreenReaderOnly = state.installType === 'screenreader';
-    const hasShadowUi = !isScreenReaderOnly;
-    const hasStandalone = state.enableStandalone && !isScreenReaderOnly;
-
     let html = '<p><strong>Getting Started:</strong></p>';
     html += '<ul style="margin: 0.5rem 0 0 1.5rem; color: #b8b8b8; list-style: none; padding: 0;">';
 
-    if (hasShadowUi) {
-        html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Track</strong> or <strong style="color: #0066cc;">Shift + Vol + Menu</strong> &mdash; Access track and master slots</li>';
-        html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Jog Click</strong> &mdash; Access overtake modules</li>';
-    }
+    html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Track</strong> or <strong style="color: #0066cc;">Shift + Vol + Menu</strong> &mdash; Access track and master slots</li>';
+    html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Jog Click</strong> &mdash; Access overtake modules</li>';
 
-    if (hasStandalone) {
+    if (state.enableStandalone) {
         html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Vol + Knob 8</strong> &mdash; Enter standalone mode</li>';
     }
 
-    if (isScreenReaderOnly) {
+    if (state.enableScreenReader) {
         html += '<li style="margin: 0.5rem 0;"><strong style="color: #0066cc;">Shift + Menu</strong> &mdash; Toggle screen reader on and off</li>';
     }
 
