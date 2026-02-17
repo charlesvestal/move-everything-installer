@@ -96,29 +96,98 @@ async function validateDevice(baseUrl) {
                     console.log(`[DEBUG] Resolving ${hostname} to IP...`);
 
                     if (process.platform === 'win32') {
-                        // Windows: Node.js can't resolve .local, use ping to get IP (IPv4 or IPv6)
-                        console.log(`[DEBUG] Windows: Using ping to resolve .local domain...`);
+                        // Windows: Try multiple resolution methods for .local domains
                         const { exec } = require('child_process');
                         const { promisify } = require('util');
                         const execAsync = promisify(exec);
 
-                        // Ping once to get the IP address
-                        const { stdout } = await execAsync(`ping -n 1 ${hostname}`, { timeout: 5000 });
-
-                        // Try to extract IPv4 first (192.168.x.x)
-                        let ipMatch = stdout.match(/\[?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]?/);
-                        if (ipMatch) {
-                            cachedDeviceIp = ipMatch[1];
-                            console.log(`[DEBUG] Resolved ${hostname} to IPv4: ${cachedDeviceIp}`);
-                        } else {
-                            // Extract IPv6 (2003:ed:5f03:...)
-                            ipMatch = stdout.match(/\[([0-9a-f:]+)\]/i);
-                            if (ipMatch) {
-                                cachedDeviceIp = `[${ipMatch[1]}]`;  // Keep brackets for URL formatting
-                                console.log(`[DEBUG] Resolved ${hostname} to IPv6: ${cachedDeviceIp}`);
-                            } else {
-                                throw new Error('Could not parse IP from ping output');
+                        const resolvers = [
+                            {
+                                name: 'dns.lookup',
+                                fn: async () => {
+                                    const dns = require('dns');
+                                    return new Promise((resolve, reject) => {
+                                        const timer = setTimeout(() => reject(new Error('dns.lookup timed out')), 5000);
+                                        dns.lookup(hostname, { family: 4 }, (err, address) => {
+                                            clearTimeout(timer);
+                                            if (err) reject(err);
+                                            else resolve(address);
+                                        });
+                                    });
+                                }
+                            },
+                            {
+                                name: 'ping',
+                                fn: async () => {
+                                    const { stdout } = await execAsync(`ping -n 1 ${hostname}`, { timeout: 5000 });
+                                    let ipMatch = stdout.match(/\[?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]?/);
+                                    if (ipMatch) return ipMatch[1];
+                                    ipMatch = stdout.match(/\[([0-9a-f:]+)\]/i);
+                                    if (ipMatch) return `[${ipMatch[1]}]`;
+                                    throw new Error('Could not parse IP from ping output');
+                                }
+                            },
+                            {
+                                name: 'Resolve-DnsName',
+                                fn: async () => {
+                                    const { stdout } = await execAsync(
+                                        `powershell -Command "(Resolve-DnsName '${hostname}' -Type A -ErrorAction Stop | Select-Object -First 1).IPAddress"`,
+                                        { timeout: 8000 }
+                                    );
+                                    const ip = stdout.trim();
+                                    if (!ip || !/^\d+\.\d+\.\d+\.\d+$/.test(ip)) throw new Error('No IPv4 from Resolve-DnsName');
+                                    return ip;
+                                }
+                            },
+                            {
+                                name: 'dns-sd',
+                                fn: async () => {
+                                    // dns-sd is available if Bonjour/iTunes is installed
+                                    // It runs continuously, so we spawn it and resolve as soon as we see an IP
+                                    const { spawn } = require('child_process');
+                                    return new Promise((resolve, reject) => {
+                                        const proc = spawn('dns-sd', ['-G', 'v4', hostname]);
+                                        let output = '';
+                                        const timeout = setTimeout(() => {
+                                            proc.kill();
+                                            reject(new Error('dns-sd timed out'));
+                                        }, 5000);
+                                        proc.stdout.on('data', (data) => {
+                                            output += data.toString();
+                                            const ipMatch = output.match(/\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[\s\r\n]/);
+                                            if (ipMatch) {
+                                                clearTimeout(timeout);
+                                                proc.kill();
+                                                resolve(ipMatch[1]);
+                                            }
+                                        });
+                                        proc.on('error', (err) => {
+                                            clearTimeout(timeout);
+                                            reject(err);
+                                        });
+                                    });
+                                }
                             }
+                        ];
+
+                        let resolved = false;
+                        for (const resolver of resolvers) {
+                            try {
+                                console.log(`[DEBUG] Windows: Trying ${resolver.name} to resolve ${hostname}...`);
+                                const ip = await resolver.fn();
+                                if (ip) {
+                                    cachedDeviceIp = ip;
+                                    console.log(`[DEBUG] Resolved ${hostname} to ${cachedDeviceIp} via ${resolver.name}`);
+                                    resolved = true;
+                                    break;
+                                }
+                            } catch (resolverErr) {
+                                console.log(`[DEBUG] ${resolver.name} failed: ${resolverErr.message}`);
+                            }
+                        }
+
+                        if (!resolved) {
+                            throw new Error('All Windows resolution methods failed');
                         }
                     } else {
                             // macOS/Linux: Use system resolver to get IPv4
