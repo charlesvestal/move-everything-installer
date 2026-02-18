@@ -5,6 +5,19 @@ const backend = require('./backend');
 
 let mainWindow;
 
+// Prevent multiple instances — focus existing window if a second copy is launched
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', () => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+        }
+    });
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 910,
