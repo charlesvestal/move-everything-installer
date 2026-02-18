@@ -83,6 +83,9 @@ function showScreen(screenName) {
 
 // Device Discovery - Try configured hostname first, fall back to manual entry
 async function startDeviceDiscovery() {
+    // Reset discovery UI state
+    document.querySelector('.manual-entry').style.display = 'none';
+
     // Read hostname from input field
     const hostnameInput = document.getElementById('device-hostname');
     if (hostnameInput && hostnameInput.value.trim()) {
@@ -94,6 +97,13 @@ async function startDeviceDiscovery() {
     const statusDiv = document.getElementById('discovery-status');
     statusDiv.innerHTML = `<div class="spinner"></div><p>Connecting to ${state.hostname}...</p>`;
 
+    // Clear any cached DNS state from a previous failed attempt
+    try {
+        await window.installer.invoke('clear_dns_cache');
+    } catch (e) {
+        // Non-critical, continue with discovery
+    }
+
     // Try configured hostname directly
     try {
         const baseUrl = `http://${state.hostname}`;
@@ -101,7 +111,7 @@ async function startDeviceDiscovery() {
 
         if (isValid) {
             console.log('[DEBUG]', state.hostname, 'validated successfully');
-            statusDiv.innerHTML = `<p style="color: green;">✓ Connected to ${state.hostname}</p>`;
+            statusDiv.innerHTML = `<p style="color: green;">&#10003; Connected to ${state.hostname}</p>`;
 
             // Automatically proceed to next step
             setTimeout(() => {
@@ -113,8 +123,12 @@ async function startDeviceDiscovery() {
         console.error('[DEBUG]', state.hostname, 'validation failed:', error);
     }
 
-    // If hostname fails, show manual entry
-    statusDiv.innerHTML = `<p style="color: orange;">Could not connect to ${state.hostname}</p><p>Please enter your Move\'s IP address below:</p>`;
+    // If hostname fails, show retry button and manual entry
+    statusDiv.innerHTML = `<p style="color: orange;">Could not connect to ${state.hostname}</p>` +
+        `<p>Make sure your Move is powered on and connected to the same WiFi network, then try again.</p>` +
+        `<button id="btn-retry-discovery" style="margin: 0.5rem 0;">Retry</button>` +
+        `<p style="margin-top: 0.5rem;">Or enter your Move\'s IP address below:</p>`;
+    document.getElementById('btn-retry-discovery').onclick = () => startDeviceDiscovery();
     document.querySelector('.manual-entry').style.display = 'block';
 }
 

@@ -212,6 +212,10 @@ ipcMain.handle('clean_device_tmp', async (event, { hostname }) => {
     return await backend.cleanDeviceTmp(hostname);
 });
 
+ipcMain.handle('clear_dns_cache', async () => {
+    return backend.clearDnsCache();
+});
+
 ipcMain.handle('fix_permissions', async (event, { hostname }) => {
     return await backend.fixPermissions(hostname);
 });
