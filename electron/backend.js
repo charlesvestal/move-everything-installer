@@ -63,6 +63,12 @@ const httpClient = axios.create({
 // Cache device IP for current session only (not persisted between runs)
 let cachedDeviceIp = null;
 
+function clearDnsCache() {
+    // Reset the in-process cached IP so the next validateDevice does a fresh DNS lookup
+    console.log('[DEBUG] Clearing cached device IP (was:', cachedDeviceIp, ')');
+    cachedDeviceIp = null;
+}
+
 async function validateDevice(baseUrl) {
     try {
         // Extract hostname from baseUrl
@@ -2192,5 +2198,6 @@ module.exports = {
     testSshFormats,
     cleanDeviceTmp,
     fixPermissions,
-    checkInstallerUpdate
+    checkInstallerUpdate,
+    clearDnsCache
 };
