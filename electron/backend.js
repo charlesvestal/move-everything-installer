@@ -1773,20 +1773,28 @@ async function uploadModuleAssets(localPaths, remoteDir, hostname) {
 
         const results = [];
 
-        async function uploadEntry(localPath, targetDir) {
+        async function uploadEntry(localPath, targetDir, isTopLevel = false) {
             const stat = fs.statSync(localPath);
             if (stat.isDirectory()) {
-                // Upload folder contents recursively, preserving structure
-                const folderName = path.basename(localPath);
-                const remoteSubdir = `${targetDir}/${folderName}`;
-                await sshExec(hostIp, `mkdir -p "${remoteSubdir}"`);
-                console.log(`[DEBUG] Created remote dir ${remoteSubdir}`);
+                // For top-level selected folders, upload contents directly into targetDir
+                // (avoids roms/roms when user selects a "roms" folder to upload into "roms/")
+                // For nested subdirectories, preserve the folder structure
+                let remoteSubdir;
+                if (isTopLevel) {
+                    remoteSubdir = targetDir;
+                    console.log(`[DEBUG] Uploading contents of ${path.basename(localPath)}/ into ${remoteSubdir}`);
+                } else {
+                    const folderName = path.basename(localPath);
+                    remoteSubdir = `${targetDir}/${folderName}`;
+                    await sshExec(hostIp, `mkdir -p "${remoteSubdir}"`);
+                    console.log(`[DEBUG] Created remote dir ${remoteSubdir}`);
+                }
 
                 const entries = fs.readdirSync(localPath);
                 for (const entry of entries) {
-                    await uploadEntry(path.join(localPath, entry), remoteSubdir);
+                    await uploadEntry(path.join(localPath, entry), remoteSubdir, false);
                 }
-                results.push({ file: folderName + '/', success: true });
+                results.push({ file: path.basename(localPath) + '/', success: true });
             } else {
                 const filename = path.basename(localPath);
                 const remotePath = `${targetDir}/${filename}`;
@@ -1803,7 +1811,7 @@ async function uploadModuleAssets(localPaths, remoteDir, hostname) {
         }
 
         for (const localPath of localPaths) {
-            await uploadEntry(localPath, remoteDir);
+            await uploadEntry(localPath, remoteDir, true);
         }
 
         return results;
