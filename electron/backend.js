@@ -752,7 +752,7 @@ async function setupSshConfig(hostname = 'move.local') {
     const usableKeyPath = getUsablePrivateKeyPath();
     let identityFile = '~/.ssh/id_ed25519';
     if (usableKeyPath) {
-        identityFile = '~/' + path.relative(os.homedir(), usableKeyPath);
+        identityFile = '~/' + path.relative(os.homedir(), usableKeyPath).replace(/\\/g, '/');
     } else if (fs.existsSync(path.join(sshDir, 'id_ed25519'))) {
         identityFile = '~/.ssh/id_ed25519';
     }
@@ -786,6 +786,7 @@ Host movedevice
         let existingConfig = '';
         if (fs.existsSync(configPath)) {
             existingConfig = await readFile(configPath, 'utf-8');
+            existingConfig = existingConfig.replace(/\r\n/g, '\n');
         }
 
         // Remove old entries to avoid duplicates
@@ -1067,11 +1068,11 @@ async function sftpUpload(hostname, localPath, remotePath, { username = 'ableton
 
 async function findGitBash() {
     const bashPaths = [
-        'bash',  // If in PATH
         'C:\\Program Files\\Git\\bin\\bash.exe',
         'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
         path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
-        path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe')
+        path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Git', 'bin', 'bash.exe'),
+        'bash',  // Last resort — could be WSL, but Git Bash paths above should catch most installs
     ];
 
     const { exec } = require('child_process');
