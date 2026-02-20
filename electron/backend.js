@@ -1516,6 +1516,153 @@ async function checkCoreInstallation(hostname) {
     }
 }
 
+async function checkShimActive(hostname) {
+    try {
+        const hostIp = cachedDeviceIp || hostname;
+        console.log('[DEBUG] Checking if shim is active (Move entrypoint type)...');
+
+        // Read first 2 bytes of /opt/move/Move to detect shell script (#!) vs ELF binary
+        // Use ableton user (file is world-readable) to avoid requiring root SSH at this stage
+        const hexOutput = await sshExec(hostIp, 'head -c 2 /opt/move/Move | od -An -tx1 | tr -d " "');
+        const hex = hexOutput.trim();
+        console.log('[DEBUG] /opt/move/Move magic bytes:', hex);
+
+        if (hex === '2321') {
+            // #! = shell script = our shim entrypoint = active
+            return { active: true };
+        } else if (hex === '7f45') {
+            // \x7fE = ELF binary = stock Move = shim disabled
+            return { active: false };
+        } else {
+            // Unknown - assume disabled to be safe
+            console.log('[DEBUG] Unknown magic bytes, assuming shim disabled');
+            return { active: false };
+        }
+    } catch (err) {
+        console.error('[DEBUG] Error checking shim status:', err.message);
+        throw new Error(`Failed to check shim status: ${err.message}`);
+    }
+}
+
+async function reenableMoveEverything(hostname) {
+    try {
+        const hostIp = cachedDeviceIp || hostname;
+        console.log('[DEBUG] Re-enabling Move Everything (root partition operations only)...');
+
+        // Verify data partition payload is intact
+        const shimCheck = await sshExec(hostIp, 'test -f /data/UserData/move-anything/move-anything-shim.so && echo "ok" || echo "missing"');
+        if (shimCheck.trim() !== 'ok') {
+            throw new Error('Shim not found on data partition. Run a full install instead.');
+        }
+        const entrypointCheck = await sshExec(hostIp, 'test -f /data/UserData/move-anything/shim-entrypoint.sh && echo "ok" || echo "missing"');
+        if (entrypointCheck.trim() !== 'ok') {
+            throw new Error('Entrypoint not found on data partition. Run a full install instead.');
+        }
+
+        // Clean stale ld.so.preload entries
+        await sshExec(hostIp, "if [ -f /etc/ld.so.preload ] && grep -q 'move-anything-shim.so' /etc/ld.so.preload; then grep -v 'move-anything-shim.so' /etc/ld.so.preload > /tmp/ld.so.preload.new || true; if [ -s /tmp/ld.so.preload.new ]; then cat /tmp/ld.so.preload.new > /etc/ld.so.preload; else rm -f /etc/ld.so.preload; fi; rm -f /tmp/ld.so.preload.new; fi", { username: 'root' });
+
+        // Symlink shim to /usr/lib/ + setuid
+        await sshExec(hostIp, 'rm -f /usr/lib/move-anything-shim.so && ln -s /data/UserData/move-anything/move-anything-shim.so /usr/lib/move-anything-shim.so', { username: 'root' });
+        await sshExec(hostIp, 'chmod u+s /data/UserData/move-anything/move-anything-shim.so', { username: 'root' });
+        const setuidCheck = await sshExec(hostIp, 'test -u /data/UserData/move-anything/move-anything-shim.so && echo "ok" || echo "no"', { username: 'root' });
+        if (setuidCheck.trim() !== 'ok') {
+            throw new Error('Shim setuid bit missing after chmod');
+        }
+
+        // Web shim symlink if present
+        const hasWebShim = await sshExec(hostIp, 'test -f /data/UserData/move-anything/move-anything-web-shim.so && echo "yes" || echo "no"');
+        if (hasWebShim.trim() === 'yes') {
+            await sshExec(hostIp, 'rm -f /usr/lib/move-anything-web-shim.so && ln -s /data/UserData/move-anything/move-anything-web-shim.so /usr/lib/move-anything-web-shim.so', { username: 'root' });
+        }
+
+        // TTS library symlinks if present
+        const hasLib = await sshExec(hostIp, 'test -d /data/UserData/move-anything/lib && echo "yes" || echo "no"');
+        if (hasLib.trim() === 'yes') {
+            await sshExec(hostIp, 'cd /data/UserData/move-anything/lib && for lib in *.so.*; do rm -f /usr/lib/$lib && ln -s /data/UserData/move-anything/lib/$lib /usr/lib/$lib; done', { username: 'root' });
+        }
+
+        // Ensure entrypoint is executable
+        await sshExec(hostIp, 'chmod +x /data/UserData/move-anything/shim-entrypoint.sh', { username: 'root' });
+
+        // Backup original Move binary if MoveOriginal doesn't exist
+        const hasMoveOriginal = await sshExec(hostIp, 'test -f /opt/move/MoveOriginal && echo "yes" || echo "no"', { username: 'root' });
+        if (hasMoveOriginal.trim() !== 'yes') {
+            await sshExec(hostIp, 'test -f /opt/move/Move && mv /opt/move/Move /opt/move/MoveOriginal', { username: 'root' });
+            try { await sshExec(hostIp, 'cp /opt/move/MoveOriginal ~/'); } catch (e) { /* non-fatal */ }
+        }
+
+        // Install shimmed entrypoint
+        await sshExec(hostIp, 'cp /data/UserData/move-anything/shim-entrypoint.sh /opt/move/Move', { username: 'root' });
+
+        // MoveWebService wrapper if web shim present
+        if (hasWebShim.trim() === 'yes') {
+            try {
+                const webSvcPath = (await sshExec(hostIp, "grep 'service_path=' /etc/init.d/move-web-service 2>/dev/null | head -n 1 | sed 's/.*service_path=//' | tr -d '[:space:]'", { username: 'root' })).trim();
+                if (webSvcPath) {
+                    const hasOriginal = await sshExec(hostIp, `test -f ${webSvcPath}Original && echo "yes" || echo "no"`, { username: 'root' });
+                    if (hasOriginal.trim() !== 'yes') {
+                        await sshExec(hostIp, `mv ${webSvcPath} ${webSvcPath}Original`, { username: 'root' });
+                    }
+                    await sshExec(hostIp, `cat > ${webSvcPath} << 'WEOF'\n#!/bin/sh\nexport LD_LIBRARY_PATH=/data/UserData/move-anything/lib:\\$LD_LIBRARY_PATH\nexport LD_PRELOAD=/usr/lib/move-anything-web-shim.so\nexec ${webSvcPath}Original "\\$@"\nWEOF\nchmod +x ${webSvcPath}`, { username: 'root' });
+                }
+            } catch (err) {
+                console.log('[DEBUG] Web service wrapper setup failed (non-fatal):', err.message);
+            }
+        }
+
+        // Stop and restart Move service
+        console.log('[DEBUG] Restarting Move service...');
+        await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
+        await sshExec(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExec(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
+        await sshExec(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Restart MoveWebService if wrapped
+        if (hasWebShim.trim() === 'yes') {
+            try {
+                const webSvcPath = (await sshExec(hostIp, "grep 'service_path=' /etc/init.d/move-web-service 2>/dev/null | head -n 1 | sed 's/.*service_path=//' | tr -d '[:space:]'", { username: 'root' })).trim();
+                if (webSvcPath) {
+                    const hasOriginal = await sshExec(hostIp, `test -f ${webSvcPath}Original && echo "yes" || echo "no"`, { username: 'root' });
+                    if (hasOriginal.trim() === 'yes') {
+                        await sshExec(hostIp, 'killall MoveWebServiceOriginal MoveWebService 2>/dev/null; sleep 1; /etc/init.d/move-web-service start >/dev/null 2>&1 || true', { username: 'root' });
+                    }
+                }
+            } catch (err) {
+                console.log('[DEBUG] Web service restart failed (non-fatal):', err.message);
+            }
+        }
+
+        await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
+
+        // Verify shim is loaded (wait up to 15 seconds)
+        let shimOk = false;
+        for (let i = 0; i < 15; i++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            try {
+                const check = await sshExec(hostIp, 'pid=$(pidof MoveOriginal 2>/dev/null | awk \'{print $1}\'); test -n "$pid" && grep -q "move-anything-shim.so" /proc/$pid/maps && echo "ok" || echo "no"', { username: 'root' });
+                if (check.trim() === 'ok') {
+                    shimOk = true;
+                    break;
+                }
+            } catch (err) {
+                // Keep trying
+            }
+        }
+
+        if (!shimOk) {
+            throw new Error('Move started without active shim. Try a full reinstall.');
+        }
+
+        console.log('[DEBUG] Re-enable complete!');
+        return { success: true };
+    } catch (err) {
+        console.error('[DEBUG] Re-enable failed:', err.message);
+        throw err;
+    }
+}
+
 async function checkInstalledVersions(hostname, progressCallback = null) {
     try {
         const hostIp = cachedDeviceIp || hostname;
@@ -2188,6 +2335,8 @@ module.exports = {
     deleteRemotePath,
     createRemoteDir,
     checkCoreInstallation,
+    checkShimActive,
+    reenableMoveEverything,
     checkInstalledVersions,
     compareVersions,
     getDiagnostics,

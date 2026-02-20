@@ -55,7 +55,8 @@ const state = {
     sshPassword: null,
     errors: [],
     versionInfo: null,
-    installedModules: []
+    installedModules: [],
+    shimDisabled: false
 };
 
 // Screen Management
@@ -450,6 +451,7 @@ async function checkVersions() {
             document.getElementById('installed-modules').style.display = 'none';
             document.getElementById('available-modules').style.display = 'none';
             document.getElementById('secondary-actions').style.display = 'none';
+            document.getElementById('reenable-banner').style.display = 'none';
             document.querySelector('#screen-modules > .action-buttons').style.display = 'flex';
 
             // Show version that will be installed
@@ -474,6 +476,16 @@ async function checkVersions() {
 
         // Set up SSH config once for the session
         await window.installer.invoke('setup_ssh_config', { hostname: state.hostname });
+
+        // Check if shim is active (detects firmware update disabling our hooks)
+        try {
+            const shimStatus = await window.installer.invoke('check_shim_active', { hostname });
+            state.shimDisabled = !shimStatus.active;
+            console.log('[DEBUG] Shim active:', shimStatus.active);
+        } catch (e) {
+            console.log('[DEBUG] Shim check failed, assuming active:', e.message);
+            state.shimDisabled = false;
+        }
 
         // Show loading state
         showScreen('version-check');
@@ -536,6 +548,9 @@ async function checkVersions() {
         // Hide fresh-install action buttons, management mode has its own buttons
         document.querySelector('#screen-modules > .action-buttons').style.display = 'none';
 
+        // Show or hide re-enable banner based on shim status
+        document.getElementById('reenable-banner').style.display = state.shimDisabled ? 'flex' : 'none';
+
         // Display management layout
         displayManagementModules();
 
@@ -555,6 +570,7 @@ async function checkVersions() {
         document.getElementById('installed-modules').style.display = 'none';
         document.getElementById('available-modules').style.display = 'none';
         document.getElementById('secondary-actions').style.display = 'none';
+        document.getElementById('reenable-banner').style.display = 'none';
         document.getElementById('core-version-subtitle').style.display = 'none';
         document.querySelector('#screen-modules > .action-buttons').style.display = 'flex';
         showScreen('modules');
@@ -1893,12 +1909,22 @@ async function startInstallation() {
 }
 
 function populateSuccessScreen(options = {}) {
-    const { isUpgrade = false, isUninstall = false } = options;
+    const { isUpgrade = false, isUninstall = false, isReenable = false } = options;
     const container = document.getElementById('success-next-steps');
     const backBtn = document.getElementById('btn-back-manage');
     const instructionEl = document.querySelector('#screen-success .instruction');
 
     const startOverBtn = document.getElementById('btn-start-over');
+
+    if (isReenable) {
+        document.querySelector('#screen-success h1').textContent = 'Re-enabled!';
+        instructionEl.textContent = 'Move Everything has been re-enabled. All your modules and settings are intact.';
+        container.style.display = 'none';
+        backBtn.style.display = '';
+        startOverBtn.style.display = 'none';
+        state.shimDisabled = false;
+        return;
+    }
 
     if (isUninstall) {
         document.querySelector('#screen-success h1').textContent = 'Uninstall Complete';
@@ -2311,6 +2337,58 @@ document.addEventListener('DOMContentLoaded', async () => {
                 link.textContent = originalText;
                 link.style.pointerEvents = '';
             }, 2000);
+        }
+    };
+
+    document.getElementById('btn-reenable').onclick = async (e) => {
+        e.preventDefault();
+        if (!confirm('Re-enable Move Everything?\n\nThis will restore the shim hooks on the root partition. No downloads needed — all your modules and settings are already on the device.')) return;
+
+        showScreen('installing');
+        try {
+            const checklist = document.getElementById('install-checklist');
+            checklist.innerHTML = `
+                <div class="checklist-item" data-item-id="reenable">
+                    <div class="checklist-icon pending">\u25CB</div>
+                    <div class="checklist-item-text">Re-enable Move Everything</div>
+                </div>
+            `;
+
+            updateChecklistItem('reenable', 'in-progress');
+            updateInstallProgress('Re-enabling Move Everything...', 20);
+
+            const hostname = state.deviceIp;
+            await window.installer.invoke('reenable_move_everything', { hostname });
+
+            updateChecklistItem('reenable', 'done');
+            updateInstallProgress('Re-enable complete!', 100);
+
+            setTimeout(() => {
+                populateSuccessScreen({ isReenable: true });
+                showScreen('success');
+            }, 500);
+        } catch (error) {
+            const errorText = String(error);
+            state.errors.push({
+                timestamp: new Date().toISOString(),
+                message: errorText
+            });
+
+            const payloadMissing =
+                errorText.includes('Shim not found on data partition') ||
+                errorText.includes('Entrypoint not found on data partition');
+
+            if (payloadMissing) {
+                const shouldReinstall = confirm(
+                    'Re-enable cannot continue because the core payload is missing from /data/UserData/move-anything.\n\nReinstall Move Everything core now?'
+                );
+                if (shouldReinstall) {
+                    await handleUpgradeCore();
+                    return;
+                }
+            }
+
+            showError('Re-enable failed: ' + error);
         }
     };
 

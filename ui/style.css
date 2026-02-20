@@ -1245,3 +1245,53 @@ button.secondary:hover {
 .asset-status.uploading {
     color: #ff9933;
 }
+
+/* Re-enable Banner */
+.reenable-banner {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: #3d3520;
+    border: 1px solid #cc9933;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.reenable-banner-icon {
+    font-size: 1.8rem;
+    color: #cc9933;
+    flex-shrink: 0;
+}
+
+.reenable-banner-content {
+    flex: 1;
+}
+
+.reenable-banner-content strong {
+    color: #ffcc66;
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+.reenable-banner-content p {
+    color: #c0b080;
+    font-size: 0.85rem;
+    margin: 0;
+}
+
+.btn-reenable {
+    background: #cc9933;
+    color: #1a1a1a;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.btn-reenable:hover {
+    background: #e0aa44;
+}

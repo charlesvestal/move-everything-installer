@@ -181,6 +181,14 @@ ipcMain.handle('check_core_installation', async (event, { hostname }) => {
     return await backend.checkCoreInstallation(hostname);
 });
 
+ipcMain.handle('check_shim_active', async (event, { hostname }) => {
+    return await backend.checkShimActive(hostname);
+});
+
+ipcMain.handle('reenable_move_everything', async (event, { hostname }) => {
+    return await backend.reenableMoveEverything(hostname);
+});
+
 ipcMain.handle('check_installed_versions', async (event, { hostname }) => {
     // Create progress callback that sends events to frontend
     const progressCallback = (message) => {
