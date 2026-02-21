@@ -2360,7 +2360,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const hostname = state.deviceIp;
             await window.installer.invoke('reenable_move_everything', { hostname });
 
-            updateChecklistItem('reenable', 'done');
+            updateChecklistItem('reenable', 'completed');
             updateInstallProgress('Re-enable complete!', 100);
 
             setTimeout(() => {
