@@ -17,10 +17,12 @@ Download the latest release for your platform from the [Releases page](https://g
 
 | Platform | File |
 |----------|------|
-| macOS (Apple Silicon) | `Move-Everything-Installer-*-arm64-mac.zip` |
-| macOS (Intel) | `Move-Everything-Installer-*-x64-mac.zip` |
-| Windows | `Move-Everything-Installer-*-x64.exe` |
-| Linux | `Move-Everything-Installer-*.AppImage` |
+| macOS (Apple Silicon) | `Move Everything Installer-*-mac-arm64.zip` |
+| macOS (Intel) | `Move Everything Installer-*-mac-x64.zip` |
+| Windows (x64) | `Move Everything Installer-*-win-x64.exe` |
+| Windows (ARM64) | `Move Everything Installer-*-win-arm64.exe` |
+| Linux (x64) | `Move Everything Installer-*-linux-x64.deb` |
+| Linux (ARM64) | `Move Everything Installer-*-linux-arm64.deb` |
 
 ## First-Time Setup
 

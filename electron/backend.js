@@ -1579,7 +1579,7 @@ async function reenableMoveEverything(hostname) {
         // TTS library symlinks if present
         const hasLib = await sshExec(hostIp, 'test -d /data/UserData/move-anything/lib && echo "yes" || echo "no"');
         if (hasLib.trim() === 'yes') {
-            await sshExec(hostIp, 'cd /data/UserData/move-anything/lib && for lib in *.so.*; do rm -f /usr/lib/$lib && ln -s /data/UserData/move-anything/lib/$lib /usr/lib/$lib; done', { username: 'root' });
+            await sshExec(hostIp, 'cd /data/UserData/move-anything/lib && for lib in *.so.*; do [ -e "$lib" ] || continue; rm -f "/usr/lib/$lib" && ln -s "/data/UserData/move-anything/lib/$lib" "/usr/lib/$lib"; done', { username: 'root' });
         }
 
         // Ensure entrypoint is executable
