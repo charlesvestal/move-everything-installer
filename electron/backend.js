@@ -827,6 +827,7 @@ async function getModuleCatalog() {
 
             let version = null;
             let assets = null;
+            let hasModuleJson = false;
 
             try {
                 console.log(`[DEBUG] Fetching module.json for: ${module.id}`);
@@ -837,10 +838,17 @@ async function getModuleCatalog() {
                     const mj = typeof mjResponse.data === 'string' ? JSON.parse(mjResponse.data) : mjResponse.data;
                     version = mj.version || null;
                     assets = mj.assets || null;
+                    hasModuleJson = true;
                     console.log(`[DEBUG] Found version ${version} for ${module.id}`);
+                } else {
+                    console.log(`[DEBUG] Skipping module ${module.id}: module.json returned HTTP ${mjResponse.status}`);
                 }
             } catch (err) {
-                console.log(`[DEBUG] Could not fetch module.json for ${module.id}:`, err.message);
+                console.log(`[DEBUG] Skipping module ${module.id}: module.json unavailable (${err.message})`);
+            }
+
+            if (!hasModuleJson) {
+                return null;
             }
 
             return {
@@ -851,7 +859,7 @@ async function getModuleCatalog() {
             };
         }));
 
-        return modules;
+        return modules.filter(Boolean);
     } catch (err) {
         throw new Error(`Failed to get module catalog: ${err.message}`);
     }
@@ -937,18 +945,79 @@ async function downloadRelease(url, destPath) {
             actualDestPath = path.join(os.tmpdir(), filename);
             console.log(`[DEBUG] Using temp path: ${actualDestPath}`);
         }
+        const maxAttempts = 4;
+        let lastError = null;
 
-        const response = await httpClient.get(url, {
-            responseType: 'stream'
-        });
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                const response = await httpClient.get(url, {
+                    responseType: 'stream'
+                });
 
-        const writer = fs.createWriteStream(actualDestPath);
-        response.data.pipe(writer);
+                if (response.status < 200 || response.status >= 300) {
+                    const statusText = response.statusText ? ` ${response.statusText}` : '';
+                    const statusError = new Error(`HTTP ${response.status}${statusText} while downloading ${url}`);
+                    const isTransientStatus = response.status === 429 || (response.status >= 500 && response.status <= 599);
 
-        return new Promise((resolve, reject) => {
-            writer.on('finish', () => resolve(actualDestPath));
-            writer.on('error', reject);
-        });
+                    if (response.data && typeof response.data.destroy === 'function') {
+                        response.data.destroy();
+                    }
+
+                    if (isTransientStatus && attempt < maxAttempts) {
+                        const retryDelayMs = 1000 * attempt;
+                        console.log(`[DEBUG] Transient download error (attempt ${attempt}/${maxAttempts}): ${statusError.message}. Retrying in ${retryDelayMs}ms...`);
+                        await fs.promises.rm(actualDestPath, { force: true }).catch(() => {});
+                        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+                        continue;
+                    }
+
+                    throw statusError;
+                }
+
+                const writer = fs.createWriteStream(actualDestPath);
+                response.data.pipe(writer);
+
+                await new Promise((resolve, reject) => {
+                    response.data.on('error', reject);
+                    writer.on('finish', resolve);
+                    writer.on('error', reject);
+                });
+
+                const expectsTarGz = /\.tar\.gz($|\?)/i.test(url) || /\.tar\.gz$/i.test(actualDestPath);
+                if (expectsTarGz) {
+                    const fileHandle = await fs.promises.open(actualDestPath, 'r');
+                    try {
+                        const magic = Buffer.alloc(2);
+                        const { bytesRead } = await fileHandle.read(magic, 0, 2, 0);
+                        const magicHex = magic.slice(0, bytesRead).toString('hex');
+                        if (magicHex !== '1f8b') {
+                            const contentType = response.headers && response.headers['content-type'] ? response.headers['content-type'] : 'unknown';
+                            throw new Error(`Downloaded file is not a gzip archive (magic=${magicHex || 'empty'}, content-type=${contentType})`);
+                        }
+                    } finally {
+                        await fileHandle.close();
+                    }
+                }
+
+                return actualDestPath;
+            } catch (err) {
+                lastError = err;
+                const msg = err && err.message ? err.message : String(err);
+                const isTransientNetworkError = /ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|EPIPE|ENETUNREACH/i.test(msg);
+
+                if (isTransientNetworkError && attempt < maxAttempts) {
+                    const retryDelayMs = 1000 * attempt;
+                    console.log(`[DEBUG] Network download error (attempt ${attempt}/${maxAttempts}): ${msg}. Retrying in ${retryDelayMs}ms...`);
+                    await fs.promises.rm(actualDestPath, { force: true }).catch(() => {});
+                    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+                    continue;
+                }
+
+                throw err;
+            }
+        }
+
+        throw lastError || new Error('Download failed after retries');
     } catch (err) {
         throw new Error(`Failed to download release: ${err.message}`);
     }
@@ -1521,23 +1590,80 @@ async function checkShimActive(hostname) {
         const hostIp = cachedDeviceIp || hostname;
         console.log('[DEBUG] Checking if shim is active (Move entrypoint type)...');
 
-        // Read first 2 bytes of /opt/move/Move to detect shell script (#!) vs ELF binary
-        // Use ableton user (file is world-readable) to avoid requiring root SSH at this stage
-        const hexOutput = await sshExec(hostIp, 'head -c 2 /opt/move/Move | od -An -tx1 | tr -d " "');
-        const hex = hexOutput.trim();
-        console.log('[DEBUG] /opt/move/Move magic bytes:', hex);
+        // First, check the currently running Move process maps for shim preload.
+        // This is the strongest signal and works for legacy/pre-backup installs too.
+        let runtimeState = 'unknown';
+        try {
+            const runtimeProbe = "pid=\\$(pidof MoveOriginal 2>/dev/null | awk '{print \\$1}'); " +
+                "if [ -z \"\\$pid\" ]; then pid=\\$(pidof Move 2>/dev/null | awk '{print \\$1}'); fi; " +
+                "if [ -z \"\\$pid\" ]; then echo \"no_process\"; " +
+                "elif grep -q \"move-anything-shim.so\" /proc/\\$pid/maps 2>/dev/null; then echo \"active\"; " +
+                "else echo \"inactive\"; fi";
+            runtimeState = (await sshExec(hostIp, runtimeProbe, { username: 'root' })).trim();
+            console.log('[DEBUG] Shim runtime probe:', runtimeState);
+            if (runtimeState === 'active') {
+                return { active: true };
+            }
+        } catch (runtimeErr) {
+            console.log('[DEBUG] Shim runtime probe failed (non-fatal):', runtimeErr.message);
+        }
 
-        if (hex === '2321') {
+        const readMagicCommand = [
+            'if [ ! -e /opt/move/Move ]; then',
+            '  echo "missing";',
+            'elif [ ! -s /opt/move/Move ]; then',
+            '  echo "empty";',
+            'elif [ ! -r /opt/move/Move ]; then',
+            '  echo "unreadable";',
+            'else',
+            '  hexdump -n 2 -v -e \'/1 "%02x"\' /opt/move/Move 2>/dev/null || echo "read_error";',
+            'fi'
+        ].join(' ');
+
+        // First try with ableton (should work in normal cases)
+        let magic = (await sshExec(hostIp, readMagicCommand)).trim();
+        console.log('[DEBUG] /opt/move/Move magic probe (ableton):', magic);
+
+        // Fallback to root if read is inconclusive with ableton
+        if (magic === 'missing' || magic === 'empty' || magic === 'unreadable' || magic === 'read_error' || !magic) {
+            try {
+                magic = (await sshExec(hostIp, readMagicCommand, { username: 'root' })).trim();
+                console.log('[DEBUG] /opt/move/Move magic probe (root fallback):', magic);
+            } catch (rootErr) {
+                console.log('[DEBUG] Root fallback probe failed:', rootErr.message);
+            }
+        }
+
+        if (magic === '2321') {
             // #! = shell script = our shim entrypoint = active
             return { active: true };
-        } else if (hex === '7f45') {
-            // \x7fE = ELF binary = stock Move = shim disabled
-            return { active: false };
-        } else {
-            // Unknown - assume disabled to be safe
-            console.log('[DEBUG] Unknown magic bytes, assuming shim disabled');
-            return { active: false };
         }
+        if (magic === '7f45') {
+            // \x7fE = ELF binary.
+            // Treat as disabled only with corroborating evidence.
+            if (runtimeState === 'inactive') {
+                return { active: false };
+            }
+
+            let hasMoveOriginal = 'unknown';
+            try {
+                hasMoveOriginal = (await sshExec(hostIp, 'test -f /opt/move/MoveOriginal && echo "yes" || echo "no"', { username: 'root' })).trim();
+                console.log('[DEBUG] /opt/move/MoveOriginal exists:', hasMoveOriginal);
+            } catch (backupErr) {
+                console.log('[DEBUG] MoveOriginal check failed (non-fatal):', backupErr.message);
+            }
+
+            if (hasMoveOriginal === 'yes') {
+                return { active: false };
+            }
+
+            // Legacy/pre-backup installs may still be active without MoveOriginal.
+            console.log('[DEBUG] ELF magic without MoveOriginal; assuming legacy active state');
+            return { active: true };
+        }
+
+        // Unknown/inconclusive should not be treated as disabled (causes false re-enable prompts)
+        throw new Error(`Unable to determine shim status (magic probe result: ${magic || 'empty'})`);
     } catch (err) {
         console.error('[DEBUG] Error checking shim status:', err.message);
         throw new Error(`Failed to check shim status: ${err.message}`);
@@ -1579,7 +1705,7 @@ async function reenableMoveEverything(hostname) {
         // TTS library symlinks if present
         const hasLib = await sshExec(hostIp, 'test -d /data/UserData/move-anything/lib && echo "yes" || echo "no"');
         if (hasLib.trim() === 'yes') {
-            await sshExec(hostIp, 'cd /data/UserData/move-anything/lib && for lib in *.so.*; do [ -e "$lib" ] || continue; rm -f "/usr/lib/$lib" && ln -s "/data/UserData/move-anything/lib/$lib" "/usr/lib/$lib"; done', { username: 'root' });
+            await sshExec(hostIp, 'cd /data/UserData/move-anything/lib && for lib in *.so.*; do [ -e "\\$lib" ] || continue; rm -f "/usr/lib/\\$lib" && ln -s "/data/UserData/move-anything/lib/\\$lib" "/usr/lib/\\$lib"; done', { username: 'root' });
         }
 
         // Ensure entrypoint is executable
@@ -1614,9 +1740,9 @@ async function reenableMoveEverything(hostname) {
         // Stop and restart Move service
         console.log('[DEBUG] Restarting Move service...');
         await sshExec(hostIp, '/etc/init.d/move stop >/dev/null 2>&1 || true', { username: 'root' });
-        await sshExec(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=$(pidof $name 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids 2>/dev/null || true; fi; done', { username: 'root' });
+        await sshExec(hostIp, 'for name in MoveOriginal Move MoveLauncher MoveMessageDisplay shadow_ui move-anything link-subscriber display-server; do pids=\\$(pidof \\$name 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids 2>/dev/null || true; fi; done', { username: 'root' });
         await sshExec(hostIp, 'rm -f /dev/shm/move-shadow-* /dev/shm/move-display-*', { username: 'root' });
-        await sshExec(hostIp, 'pids=$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "$pids" ]; then kill -9 $pids || true; fi', { username: 'root' });
+        await sshExec(hostIp, 'pids=\\$(fuser /dev/ablspi0.0 2>/dev/null || true); if [ -n "\\$pids" ]; then kill -9 \\$pids || true; fi', { username: 'root' });
         await new Promise(resolve => setTimeout(resolve, 2000));
 
         // Restart MoveWebService if wrapped
@@ -1636,12 +1762,12 @@ async function reenableMoveEverything(hostname) {
 
         await sshExec(hostIp, '/etc/init.d/move start >/dev/null 2>&1', { username: 'root' });
 
-        // Verify shim is loaded (wait up to 15 seconds)
+        // Verify shim is loaded (wait up to 30 seconds)
         let shimOk = false;
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 30; i++) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             try {
-                const check = await sshExec(hostIp, 'pid=$(pidof MoveOriginal 2>/dev/null | awk \'{print $1}\'); test -n "$pid" && grep -q "move-anything-shim.so" /proc/$pid/maps && echo "ok" || echo "no"', { username: 'root' });
+                const check = await sshExec(hostIp, 'pid=\\$(pidof MoveOriginal 2>/dev/null | awk \'{print \\$1}\'); test -n "\\$pid" && grep -q "move-anything-shim.so" /proc/\\$pid/maps && echo "ok" || echo "no"', { username: 'root' });
                 if (check.trim() === 'ok') {
                     shimOk = true;
                     break;

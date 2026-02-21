@@ -1266,6 +1266,7 @@ button.secondary:hover {
 
 .reenable-banner-content {
     flex: 1;
+    min-width: 0;
 }
 
 .reenable-banner-content strong {
@@ -1290,6 +1291,8 @@ button.secondary:hover {
     cursor: pointer;
     white-space: nowrap;
     flex-shrink: 0;
+    width: auto;
+    margin-top: 0;
 }
 
 .btn-reenable:hover {
