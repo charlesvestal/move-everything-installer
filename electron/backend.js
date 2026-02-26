@@ -1135,6 +1135,64 @@ async function sftpUpload(hostname, localPath, remotePath, { username = 'ableton
     });
 }
 
+// Helper to download file via SFTP
+async function sftpDownload(hostname, remotePath, localPath, { username = 'ableton' } = {}) {
+    const hostIp = cachedDeviceIp || hostname;
+    const keyPath = getUsablePrivateKeyPath();
+    if (!keyPath) {
+        throw new Error('No usable SSH key found (keys may be passphrase-protected)');
+    }
+
+    return new Promise((resolve, reject) => {
+        const conn = new Client();
+
+        conn.on('ready', () => {
+            conn.sftp((err, sftp) => {
+                if (err) {
+                    conn.end();
+                    return reject(err);
+                }
+
+                sftp.fastGet(remotePath, localPath, (err) => {
+                    conn.end();
+                    if (err) {
+                        reject(err);
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+        });
+
+        conn.on('error', (err) => {
+            reject(err);
+        });
+
+        conn.connect({
+            host: hostIp,
+            port: 22,
+            username,
+            privateKey: fs.readFileSync(keyPath),
+            family: 4
+        });
+    });
+}
+
+async function downloadRemoteFile(hostname, remotePath, localPath) {
+    try {
+        // Validate path is within move-anything directory
+        if (!remotePath.startsWith('/data/UserData/move-anything/')) {
+            throw new Error('Path must be within /data/UserData/move-anything/');
+        }
+        const hostIp = cachedDeviceIp || hostname;
+        await sftpDownload(hostIp, remotePath, localPath);
+        return true;
+    } catch (err) {
+        console.error('[DEBUG] downloadRemoteFile error:', err.message);
+        throw new Error(`Failed to download remote file: ${err.message}`);
+    }
+}
+
 async function findGitBash() {
     const bashPaths = [
         'C:\\Program Files\\Git\\bin\\bash.exe',
@@ -1528,9 +1586,9 @@ async function listRemoteDir(hostname, remotePath) {
 
 async function deleteRemotePath(hostname, remotePath) {
     try {
-        // Validate path is within modules directory
-        if (!remotePath.startsWith('/data/UserData/move-anything/modules/')) {
-            throw new Error('Path must be within /data/UserData/move-anything/modules/');
+        // Validate path is within move-anything directory
+        if (!remotePath.startsWith('/data/UserData/move-anything/')) {
+            throw new Error('Path must be within /data/UserData/move-anything/');
         }
         const hostIp = cachedDeviceIp || hostname;
         await sshExec(hostIp, `rm -rf "${remotePath}"`);
@@ -1543,9 +1601,9 @@ async function deleteRemotePath(hostname, remotePath) {
 
 async function createRemoteDir(hostname, remotePath) {
     try {
-        // Validate path is within modules directory
-        if (!remotePath.startsWith('/data/UserData/move-anything/modules/')) {
-            throw new Error('Path must be within /data/UserData/move-anything/modules/');
+        // Validate path is within move-anything directory
+        if (!remotePath.startsWith('/data/UserData/move-anything/')) {
+            throw new Error('Path must be within /data/UserData/move-anything/');
         }
         const hostIp = cachedDeviceIp || hostname;
         await sshExec(hostIp, `mkdir -p "${remotePath}"`);
@@ -2460,6 +2518,7 @@ module.exports = {
     listRemoteDir,
     deleteRemotePath,
     createRemoteDir,
+    downloadRemoteFile,
     checkCoreInstallation,
     checkShimActive,
     reenableMoveEverything,

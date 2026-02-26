@@ -1484,6 +1484,31 @@ function closeAssetBrowser() {
     document.getElementById('asset-browser-modal').style.display = 'none';
 }
 
+function openGlobalFileBrowser() {
+    const basePath = '/data/UserData/move-anything';
+
+    assetBrowser.open = true;
+    assetBrowser.moduleId = null;
+    assetBrowser.componentType = null;
+    assetBrowser.assets = { path: '.', extensions: [], label: 'Files', allowFolders: true };
+    assetBrowser.basePath = basePath;
+    assetBrowser.currentPath = basePath;
+
+    document.getElementById('asset-browser-title').textContent = 'Browse Files';
+    document.getElementById('asset-browser-list').innerHTML = '';
+    document.getElementById('asset-browser-breadcrumb').innerHTML = '';
+
+    const hintEl = document.getElementById('asset-browser-hint');
+    hintEl.textContent = 'Upload assets for individual modules or browse the entire Move Everything folder.';
+    hintEl.style.display = 'block';
+
+    setAssetStatus('', null);
+    showAssetSpinner(true);
+    document.getElementById('asset-browser-modal').style.display = 'flex';
+
+    refreshAssetListing();
+}
+
 async function refreshAssetListing() {
     if (!assetBrowser.open) return;
     assetBrowser.loading = true;
@@ -1568,6 +1593,16 @@ function renderAssetList(entries) {
         row.appendChild(name);
         row.appendChild(size);
 
+        // Download button for files (not directories, not at root)
+        if (!entry.isDirectory && !atRoot) {
+            const dlBtn = document.createElement('button');
+            dlBtn.className = 'asset-entry-download';
+            dlBtn.textContent = '\u2B07';
+            dlBtn.title = 'Download';
+            dlBtn.onclick = () => handleDownloadAssetEntry(entry.name);
+            row.appendChild(dlBtn);
+        }
+
         // Hide delete button at root to prevent deleting top-level dirs
         if (!atRoot) {
             const delBtn = document.createElement('button');
@@ -1634,6 +1669,26 @@ function renderBreadcrumb() {
 function navigateToSubdir(name) {
     assetBrowser.currentPath = assetBrowser.currentPath + '/' + name;
     refreshAssetListing();
+}
+
+async function handleDownloadAssetEntry(name) {
+    setAssetStatus(`Downloading ${name}...`, 'uploading');
+    try {
+        const fullPath = assetBrowser.currentPath + '/' + name;
+        const result = await window.installer.invoke('download_remote_file', {
+            hostname: state.deviceIp,
+            remotePath: fullPath,
+            defaultName: name
+        });
+        if (result.canceled) {
+            setAssetStatus('', null);
+        } else {
+            setAssetStatus(`Downloaded ${name}`, null);
+        }
+    } catch (err) {
+        console.error('Download failed:', err);
+        setAssetStatus('Download failed: ' + err.message, 'error');
+    }
 }
 
 async function handleDeleteAssetEntry(name, isDir) {
@@ -2249,7 +2304,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Management mode buttons
     document.getElementById('btn-upgrade-all').onclick = handleUpgradeAll;
 
-    // Secondary action links (Screen Reader / Uninstall)
+    // Secondary action links
+    document.getElementById('link-browse-files').onclick = (e) => {
+        e.preventDefault();
+        openGlobalFileBrowser();
+    };
+
     document.getElementById('link-screenreader').onclick = async (e) => {
         e.preventDefault();
         const link = e.target;

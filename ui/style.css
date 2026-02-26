@@ -1187,6 +1187,23 @@ button.secondary:hover {
     min-width: 60px;
 }
 
+.asset-entry-download {
+    background: none;
+    border: none;
+    color: #446644;
+    cursor: pointer;
+    padding: 2px 6px;
+    margin: 0 0 0 0.5rem;
+    width: auto;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.asset-entry-download:hover {
+    color: #44aa44;
+    background: none;
+}
+
 .asset-entry-delete {
     background: none;
     border: none;

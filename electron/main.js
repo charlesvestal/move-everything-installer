@@ -177,6 +177,16 @@ ipcMain.handle('create_remote_dir', async (event, { hostname, remotePath }) => {
     return await backend.createRemoteDir(hostname, remotePath);
 });
 
+ipcMain.handle('download_remote_file', async (event, { hostname, remotePath, defaultName }) => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: defaultName || 'download',
+        title: 'Save File As'
+    });
+    if (result.canceled) return { canceled: true };
+    await backend.downloadRemoteFile(hostname, remotePath, result.filePath);
+    return { canceled: false, filePath: result.filePath };
+});
+
 ipcMain.handle('check_core_installation', async (event, { hostname }) => {
     return await backend.checkCoreInstallation(hostname);
 });
